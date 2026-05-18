@@ -233,20 +233,20 @@ public class MainActivity extends Activity {
         Runnable parentPage = () -> showMainPage(true, -1);
         backAction = parentPage;
         root.removeAllViews();
-        addDetailHeader("크기", parentPage);
+        addDetailHeader("크기와 레이아웃", parentPage);
 
         KeyboardSizePreviewView preview = new KeyboardSizePreviewView(this, parentPage);
 
+        addSectionTitle("조절 모드");
+        LinearLayout modeCard = addCard();
         LinearLayout modeRow = new LinearLayout(this);
         modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setPadding(0, dp(10), 0, dp(8));
+        modeRow.setPadding(dp(10), dp(10), dp(10), dp(10));
         TextView positionButton = sizeModeButton("위치 조절", true);
         TextView layoutButton = sizeModeButton("레이아웃 조절", false);
         modeRow.addView(positionButton, new LinearLayout.LayoutParams(0, dp(42), 1f));
-        LinearLayout.LayoutParams layoutButtonParams = new LinearLayout.LayoutParams(0, dp(42), 1f);
-        layoutButtonParams.setMargins(dp(8), 0, 0, 0);
-        modeRow.addView(layoutButton, layoutButtonParams);
-        root.addView(modeRow, matchWrap());
+        modeRow.addView(layoutButton, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        modeCard.addView(modeRow, matchWrap());
 
         TextView description = new TextView(this);
         description.setText("크기를 조절하려면 키보드 측면에 있는 핸들을 움직이세요.");
@@ -288,8 +288,8 @@ public class MainActivity extends Activity {
     }
 
     private void setSizeModeSelected(TextView button, boolean selected) {
-        GradientDrawable background = rounded(selected ? Color.rgb(32, 118, 255) : Color.WHITE, 14);
-        background.setStroke(Math.max(1, dp(1)), selected ? Color.rgb(32, 118, 255) : Color.rgb(210, 216, 224));
+        GradientDrawable background = rounded(selected ? Color.rgb(32, 118, 255) : Color.rgb(244, 246, 249), 12);
+        background.setStroke(Math.max(1, dp(1)), selected ? Color.rgb(32, 118, 255) : Color.rgb(218, 223, 230));
         button.setBackground(background);
         button.setTextColor(selected ? Color.WHITE : TEXT_PRIMARY);
     }

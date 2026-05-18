@@ -31,8 +31,8 @@ public class KeyboardSurfaceView extends View {
     private static final float HANGUL_RIGHT_KEY_WEIGHT = 1.45f;
     private static final float SYMBOL_SIDE_KEY_WEIGHT = 1.05f;
     private static final float NUMBER_SIDE_KEY_WEIGHT = 1.05f;
-    private static final String[] TOOLBAR_LABELS = {"‹", "☺", "GIF", "", "⚙", "", "문구"};
-    private static final float[] TOOLBAR_WEIGHTS = {0.8f, 1.1f, 1.35f, 1.1f, 1.1f, 0.22f, 1.0f};
+    private static final String[] TOOLBAR_LABELS = {"☺", "GIF", "", "⚙", "", "⋮"};
+    private static final float[] TOOLBAR_WEIGHTS = {1.1f, 1.35f, 1.1f, 1.1f, 0.22f, 1.0f};
     private static final String[][] SYMBOL_PAGES = {
             {"~", "!", "@", "#", "$", "%", "^", "&", "*", "+", "-", "_", "=", "?", "/", "|", "\\", "'", "`", "´", "\"", "‘", "’", "“", "”", ";"},
             {"<", ">", "(", ")", "[", "]", "{", "}", ":", ",", ".", "…", "·", "•", "°", "¿", "¡", "§", "¶", "※", "№", "©", "®", "™", "℠", "℗"},
@@ -688,26 +688,20 @@ public class KeyboardSurfaceView extends View {
         for (int i = 0; i < TOOLBAR_LABELS.length; i++) {
             float width = contentWidth * (TOOLBAR_WEIGHTS[i] / totalWeight);
             float centerX = left + width / 2f;
-            if (i == 5) {
+            if (i == 4) {
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(Math.max(1f, dp(1)));
                 paint.setColor(theme.stroke);
                 float dividerX = centerX;
                 canvas.drawLine(dividerX, dp(12), dividerX, toolbarHeight - dp(12), paint);
-            } else if (i == 0) {
-                paint.setStyle(Paint.Style.FILL);
-                paint.setColor(theme.keyNormal);
-                canvas.drawCircle(centerX, toolbarHeight / 2f, Math.min(dp(22), toolbarHeight * 0.38f), paint);
-                paint.setColor(theme.text);
-                paint.setTextSize(dp(34));
-                drawCenteredText(canvas, TOOLBAR_LABELS[i], centerX - dp(1), toolbarHeight / 2f);
-            } else if (i == 3) {
+            } else if (i == 2) {
                 drawClipboardIcon(canvas, centerX, toolbarHeight / 2f, theme.hint);
             } else {
                 paint.setStyle(Paint.Style.FILL);
                 paint.setColor(theme.hint);
-                paint.setTextSize(i == 2 ? dp(18) : dp(25));
-                paint.setFakeBoldText(i == 2);
+                boolean gif = "GIF".equals(TOOLBAR_LABELS[i]);
+                paint.setTextSize(gif ? dp(18) : dp(25));
+                paint.setFakeBoldText(gif);
                 drawCenteredText(canvas, TOOLBAR_LABELS[i], centerX, toolbarHeight / 2f);
                 paint.setFakeBoldText(false);
             }
@@ -880,7 +874,11 @@ public class KeyboardSurfaceView extends View {
                 }
             }
             String line = remaining.substring(0, breakAt).trim();
-            remaining = remaining.substring(Math.min(breakAt + 1, remaining.length())).trim();
+            int nextStart = breakAt;
+            if (nextStart < remaining.length() && remaining.charAt(nextStart) == ' ') {
+                nextStart++;
+            }
+            remaining = remaining.substring(nextStart).trim();
             if (lines == maxLines - 1 && !remaining.isEmpty()) {
                 while (paint.measureText(line + "…") > rect.width() && line.length() > 1) {
                     line = line.substring(0, line.length() - 1);
@@ -1048,15 +1046,12 @@ public class KeyboardSurfaceView extends View {
     private KeySpec toolbarKeyForIndex(int index) {
         switch (index) {
             case 0:
-                return KeySpec.command("", KeySpec.Type.HIDE_KEYBOARD);
-            case 1:
                 return KeySpec.command("", KeySpec.Type.MODE_SYMBOLS);
-            case 3:
+            case 2:
                 return KeySpec.command("", KeySpec.Type.CLIPBOARD_CONTEXT);
-            case 4:
+            case 3:
+            case 5:
                 return KeySpec.command("", KeySpec.Type.SETTINGS);
-            case 6:
-                return KeySpec.command("", KeySpec.Type.USEFUL_SENTENCE);
             default:
                 return KeySpec.command("", KeySpec.Type.NO_OP);
         }

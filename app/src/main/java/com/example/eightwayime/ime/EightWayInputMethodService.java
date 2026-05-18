@@ -1,11 +1,16 @@
 package com.example.eightwayime.ime;
 
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.inputmethodservice.InputMethodService;
 import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
@@ -13,11 +18,16 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputContentInfo;
 
 import com.example.eightwayime.MainActivity;
 import com.example.eightwayime.SettingsStore;
 import com.example.eightwayime.hangul.GestureCalibration;
 import com.example.eightwayime.hangul.HangulComposer;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 public class EightWayInputMethodService extends InputMethodService
         implements KeyboardActionListener, KeyboardSurfaceView.GestureTraceListener {
@@ -137,7 +147,7 @@ public class EightWayInputMethodService extends InputMethodService
                 showClipboardContext();
                 break;
             case CLIPBOARD_PASTE:
-                pasteFromClipboard();
+                pasteClipboardItem(key.clipboardIndex);
                 if (keyboardView != null) {
                     keyboardView.hideClipboardContext();
                 }
@@ -294,31 +304,170 @@ public class EightWayInputMethodService extends InputMethodService
         if (keyboardView == null) {
             return;
         }
-        keyboardView.showClipboardContext(currentEditorIsPassword ? "보안 입력란" : clipboardText());
-    }
-
-    private void pasteFromClipboard() {
-        commitComposingText();
-        InputConnection inputConnection = getCurrentInputConnection();
-        boolean handledByEditor = inputConnection != null
-                && inputConnection.performContextMenuAction(android.R.id.paste);
-        if (handledByEditor) {
+        if (currentEditorIsPassword) {
+            keyboardView.showClipboardContext(new ArrayList<>(), "보안 입력란에서는 클립보드 미리보기를 숨깁니다.");
             return;
         }
-        commitTextIfNeeded(clipboardText());
+        keyboardView.showClipboardContext(clipboardClips(), "클립보드가 비어 있습니다.");
     }
 
-    private String clipboardText() {
+    private void pasteClipboardItem(int clipboardIndex) {
+        commitComposingText();
+        ClipData clipData = currentClipData();
+        if (clipData == null || clipData.getItemCount() == 0) {
+            return;
+        }
+        int itemIndex = clipboardIndex >= 0 && clipboardIndex < clipData.getItemCount() ? clipboardIndex : 0;
+        ClipData.Item item = clipData.getItemAt(itemIndex);
+        if (tryCommitContent(clipData, item)) {
+            return;
+        }
+        CharSequence text = item.getText();
+        if (text == null) {
+            text = item.coerceToText(this);
+        }
+        commitTextIfNeeded(text == null ? "" : text.toString());
+    }
+
+    private boolean pasteFromClipboardAction() {
+        InputConnection inputConnection = getCurrentInputConnection();
+        return inputConnection != null && inputConnection.performContextMenuAction(android.R.id.paste);
+    }
+
+    private ClipData currentClipData() {
         ClipboardManager clipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (clipboardManager == null || !clipboardManager.hasPrimaryClip()) {
-            return "";
+            return null;
         }
-        ClipData clipData = clipboardManager.getPrimaryClip();
-        if (clipData == null || clipData.getItemCount() == 0) {
-            return "";
+        return clipboardManager.getPrimaryClip();
+    }
+
+    private List<KeyboardSurfaceView.ClipboardClip> clipboardClips() {
+        List<KeyboardSurfaceView.ClipboardClip> clips = new ArrayList<>();
+        ClipData clipData = currentClipData();
+        if (clipData == null) {
+            return clips;
         }
-        CharSequence text = clipData.getItemAt(0).coerceToText(this);
-        return text == null ? "" : text.toString();
+        int count = Math.min(clipData.getItemCount(), 12);
+        for (int i = 0; i < count; i++) {
+            ClipData.Item item = clipData.getItemAt(i);
+            boolean image = isImageItem(clipData, item);
+            Bitmap thumbnail = image && item.getUri() != null ? loadThumbnail(item.getUri()) : null;
+            String text = displayTextForItem(item, image);
+            String typeLabel = image ? "이미지" : (item.getUri() != null ? "파일" : "텍스트");
+            clips.add(new KeyboardSurfaceView.ClipboardClip(i, text, typeLabel, thumbnail, image));
+        }
+        return clips;
+    }
+
+    private String displayTextForItem(ClipData.Item item, boolean image) {
+        CharSequence text = item.getText();
+        if (text != null && text.length() > 0) {
+            return text.toString();
+        }
+        if (item.getHtmlText() != null && !item.getHtmlText().isEmpty()) {
+            return item.getHtmlText().replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
+        }
+        Uri uri = item.getUri();
+        if (image) {
+            return "이미지";
+        }
+        return uri == null ? "" : uri.toString();
+    }
+
+    private boolean tryCommitContent(ClipData clipData, ClipData.Item item) {
+        Uri uri = item.getUri();
+        if (uri == null || !isImageItem(clipData, item)) {
+            return false;
+        }
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection == null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+            String[] mimeTypes = imageMimeTypes(clipData, uri);
+            ClipDescription description = new ClipDescription("image", mimeTypes);
+            InputContentInfo contentInfo = new InputContentInfo(uri, description, null);
+            Bundle opts = new Bundle();
+            if (inputConnection.commitContent(contentInfo,
+                    InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, opts)) {
+                return true;
+            }
+        }
+        return pasteFromClipboardAction();
+    }
+
+    private boolean isImageItem(ClipData clipData, ClipData.Item item) {
+        ClipDescription description = clipData.getDescription();
+        if (description != null) {
+            for (int i = 0; i < description.getMimeTypeCount(); i++) {
+                String mimeType = description.getMimeType(i);
+                if (mimeType != null && mimeType.startsWith("image/")) {
+                    return true;
+                }
+            }
+        }
+        Uri uri = item.getUri();
+        if (uri == null) {
+            return false;
+        }
+        try {
+            String type = getContentResolver().getType(uri);
+            return type != null && type.startsWith("image/");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String[] imageMimeTypes(ClipData clipData, Uri uri) {
+        List<String> mimeTypes = new ArrayList<>();
+        ClipDescription description = clipData.getDescription();
+        if (description != null) {
+            for (int i = 0; i < description.getMimeTypeCount(); i++) {
+                String mimeType = description.getMimeType(i);
+                if (mimeType != null && mimeType.startsWith("image/")) {
+                    mimeTypes.add(mimeType);
+                }
+            }
+        }
+        try {
+            String type = getContentResolver().getType(uri);
+            if (type != null && type.startsWith("image/") && !mimeTypes.contains(type)) {
+                mimeTypes.add(type);
+            }
+        } catch (Exception ignored) {
+        }
+        if (mimeTypes.isEmpty()) {
+            mimeTypes.add("image/*");
+        }
+        return mimeTypes.toArray(new String[0]);
+    }
+
+    private Bitmap loadThumbnail(Uri uri) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                BitmapFactory.decodeStream(input, null, bounds);
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sampleSize(bounds, 320, 220);
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                return BitmapFactory.decodeStream(input, null, options);
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private int sampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        int inSampleSize = 1;
+        int height = options.outHeight;
+        int width = options.outWidth;
+        while (height / inSampleSize > reqHeight * 2 || width / inSampleSize > reqWidth * 2) {
+            inSampleSize *= 2;
+        }
+        return Math.max(1, inSampleSize);
     }
 
     private boolean isPasswordInput(EditorInfo attribute) {
