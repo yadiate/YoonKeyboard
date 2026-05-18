@@ -7,6 +7,7 @@ public class KeySpec {
         CHARACTER,
         HANGUL_CONSONANT,
         HANGUL_VOWEL,
+        HANGUL_VOWEL_PAD,
         MODE_HANGUL,
         MODE_ENGLISH,
         MODE_SYMBOLS,
@@ -15,13 +16,12 @@ public class KeySpec {
         DELETE,
         SPACE,
         ENTER,
+        HIDE_KEYBOARD,
         SETTINGS,
         USEFUL_SENTENCE,
         MY_INFO,
         MOVE_LEFT,
         MOVE_RIGHT,
-        HANGUL_CONSONANTS,
-        HANGUL_VOWELS,
         NO_OP
     }
 
@@ -33,13 +33,15 @@ public class KeySpec {
     public final Consonant consonant;
     public final int vowelIndex;
     public final float weight;
+    public final int rowSpan;
+    public final int columnSpan;
 
     private KeySpec(String label, Type type, String outputText, Consonant consonant, int vowelIndex, float weight) {
-        this(label, null, null, type, outputText, consonant, vowelIndex, weight);
+        this(label, null, null, type, outputText, consonant, vowelIndex, weight, 1, 1);
     }
 
     private KeySpec(String label, String hintTop, String hintBottom, Type type, String outputText,
-                    Consonant consonant, int vowelIndex, float weight) {
+                    Consonant consonant, int vowelIndex, float weight, int rowSpan, int columnSpan) {
         this.label = label;
         this.hintTop = hintTop;
         this.hintBottom = hintBottom;
@@ -48,6 +50,8 @@ public class KeySpec {
         this.consonant = consonant;
         this.vowelIndex = vowelIndex;
         this.weight = weight;
+        this.rowSpan = Math.max(1, rowSpan);
+        this.columnSpan = Math.max(1, columnSpan);
     }
 
     public static KeySpec command(String label, Type type) {
@@ -78,11 +82,23 @@ public class KeySpec {
         return new KeySpec(label, Type.HANGUL_VOWEL, null, null, vowelIndex, 1f);
     }
 
+    public static KeySpec vowelPad(String label, float weight) {
+        return new KeySpec(label, Type.HANGUL_VOWEL_PAD, null, null, -1, weight);
+    }
+
     public static KeySpec spacer(float weight) {
         return new KeySpec("", Type.NO_OP, null, null, -1, weight);
     }
 
     public KeySpec withHints(String hintTop, String hintBottom) {
-        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight);
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan, columnSpan);
+    }
+
+    public KeySpec withRowSpan(int rowSpan) {
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan, columnSpan);
+    }
+
+    public KeySpec withColumnSpan(int columnSpan) {
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan, columnSpan);
     }
 }

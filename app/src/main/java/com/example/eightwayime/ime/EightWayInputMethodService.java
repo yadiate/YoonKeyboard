@@ -49,7 +49,7 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
 
     @Override
     public void onKey(KeySpec key) {
-        if (key.type == KeySpec.Type.NO_OP) {
+        if (key.type == KeySpec.Type.NO_OP || key.type == KeySpec.Type.HANGUL_VOWEL_PAD) {
             return;
         }
         playKeySound();
@@ -98,6 +98,10 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
                 commitComposingText();
                 sendEnter();
                 break;
+            case HIDE_KEYBOARD:
+                commitComposingText();
+                requestHideSelf(0);
+                break;
             case SETTINGS:
                 openSettings();
                 break;
@@ -113,17 +117,8 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
             case MOVE_RIGHT:
                 moveCursor(KeyEvent.KEYCODE_DPAD_RIGHT);
                 break;
-            case HANGUL_CONSONANTS:
-                if (keyboardView != null) {
-                    keyboardView.setHangulVowelPanel(false);
-                }
-                break;
-            case HANGUL_VOWELS:
-                if (keyboardView != null) {
-                    keyboardView.setHangulVowelPanel(true);
-                }
-                break;
             case NO_OP:
+            case HANGUL_VOWEL_PAD:
                 break;
         }
     }

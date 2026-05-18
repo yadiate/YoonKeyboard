@@ -3,11 +3,13 @@ package com.example.eightwayime.ime;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
-import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.Build;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
 
 import com.example.eightwayime.SettingsStore;
 import com.example.eightwayime.hangul.Consonant;
@@ -19,6 +21,11 @@ import java.util.Arrays;
 import java.util.List;
 
 public class KeyboardSurfaceView extends View {
+    private static final float HANGUL_LEFT_KEY_WEIGHT = 1.1f;
+    private static final float HANGUL_RIGHT_KEY_WEIGHT = 1.45f;
+    private static final String[] TOOLBAR_LABELS = {"‹", "☺", "GIF", "▣", "⚙", "", "•••"};
+    private static final float[] TOOLBAR_WEIGHTS = {0.8f, 1.1f, 1.35f, 1.1f, 1.1f, 0.22f, 1.0f};
+
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final List<RowLayout> rows = new ArrayList<>();
     private final List<GestureVowelMapper.Point> gesturePoints = new ArrayList<>();
@@ -27,7 +34,7 @@ public class KeyboardSurfaceView extends View {
     private KeyboardActionListener listener;
     private KeyboardMode mode = KeyboardMode.HANGUL;
     private boolean shift;
-    private boolean hangulVowelPanel;
+    private int bottomSystemInset;
     private KeyBounds pressedKey;
 
     public KeyboardSurfaceView(Context context) {
@@ -36,6 +43,16 @@ public class KeyboardSurfaceView extends View {
         gestureMapper = new GestureVowelMapper(getResources().getDisplayMetrics());
         applyGestureSettings();
         setBackgroundColor(settings.theme.background);
+        setFitsSystemWindows(false);
+        setOnApplyWindowInsetsListener((view, insets) -> {
+            int nextBottomInset = bottomInsetFrom(insets);
+            if (bottomSystemInset != nextBottomInset) {
+                bottomSystemInset = nextBottomInset;
+                requestLayout();
+                invalidate();
+            }
+            return insets;
+        });
         buildRows();
     }
 
@@ -49,9 +66,6 @@ public class KeyboardSurfaceView extends View {
 
     public void setSettings(SettingsStore.Snapshot settings) {
         this.settings = settings;
-        if (!isTwoBeolsikHangul()) {
-            hangulVowelPanel = false;
-        }
         applyGestureSettings();
         setBackgroundColor(settings.theme.background);
         buildRows();
@@ -67,19 +81,6 @@ public class KeyboardSurfaceView extends View {
     public void setMode(KeyboardMode mode) {
         this.mode = mode;
         this.shift = false;
-        if (mode != KeyboardMode.HANGUL) {
-            hangulVowelPanel = false;
-        }
-        buildRows();
-        requestLayout();
-        invalidate();
-    }
-
-    public void setHangulVowelPanel(boolean enabled) {
-        if (mode != KeyboardMode.HANGUL || !isTwoBeolsikHangul()) {
-            return;
-        }
-        hangulVowelPanel = enabled;
         buildRows();
         requestLayout();
         invalidate();
@@ -99,16 +100,19 @@ public class KeyboardSurfaceView extends View {
         return shift;
     }
 
-    private boolean isTwoBeolsikHangul() {
-        return settings.hangulTypeIndex == SettingsStore.HANGUL_TYPE_TWO_BEOLSIK_VERTICAL
-                || settings.hangulTypeIndex == SettingsStore.HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL;
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        requestApplyInsets();
     }
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         int width = MeasureSpec.getSize(widthMeasureSpec);
         int rowCount = Math.max(4, rows.size());
-        int desiredHeight = dp(rowCount >= 5 ? 310 : (mode == KeyboardMode.SYMBOLS ? 268 : 252));
+        int desiredHeight = toolbarHeight()
+                + dp(rowCount >= 5 ? 310 : (mode == KeyboardMode.SYMBOLS ? 268 : 252))
+                + bottomSafeInset();
         int height = resolveSize(desiredHeight, heightMeasureSpec);
         setMeasuredDimension(width, height);
     }
@@ -124,19 +128,24 @@ public class KeyboardSurfaceView extends View {
         super.onDraw(canvas);
 
         float gap = dp(4);
-        float top = gap;
-        float rowHeight = (getHeight() - gap * (rows.size() + 1)) / rows.size();
+        float toolbarHeight = toolbarHeight();
+        drawToolbar(canvas, toolbarHeight);
+        float top = toolbarHeight + gap;
+        float keyboardHeight = keyboardHeight();
+        float rowAreaHeight = keyboardHeight - toolbarHeight;
+        float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
         paint.setTextAlign(Paint.Align.CENTER);
 
         for (RowLayout row : rows) {
             float totalWeight = row.totalWeight();
             float left = gap;
             float availableWidth = getWidth() - gap * (row.keys.size() + 1);
-            for (KeySpec key : row.keys) {
+            for (int i = 0; i < row.keys.size(); i++) {
+                KeySpec key = row.keys.get(i);
                 float keyWidth = availableWidth * (key.weight / totalWeight);
                 RectF rect = new RectF(left, top, left + keyWidth, top + rowHeight);
                 boolean pressed = pressedKey != null && pressedKey.key == key;
-                drawKey(canvas, key, rect, pressed);
+                drawKey(canvas, key, spanRect(row, i, rect, rowHeight, gap, availableWidth, totalWeight), pressed);
                 left += keyWidth + gap;
             }
             top += rowHeight + gap;
@@ -147,16 +156,20 @@ public class KeyboardSurfaceView extends View {
     public boolean onTouchEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                pressedKey = findKey(event.getX(), event.getY());
                 gesturePoints.clear();
-                gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY()));
+                pressedKey = findToolbarKey(event.getX(), event.getY());
+                if (pressedKey == null) {
+                    pressedKey = findKey(event.getX(), event.getY());
+                    gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY()));
+                }
                 invalidate();
                 return true;
             case MotionEvent.ACTION_MOVE:
-                gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY()));
+                if (pressedKey == null || !pressedKey.toolbar) {
+                    gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY()));
+                }
                 return true;
             case MotionEvent.ACTION_UP:
-                gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY()));
                 KeyBounds releasedKey = pressedKey;
                 pressedKey = null;
                 invalidate();
@@ -164,9 +177,18 @@ public class KeyboardSurfaceView extends View {
                     gesturePoints.clear();
                     return true;
                 }
-                Integer vowel = gestureMapper.map(gesturePoints);
+                if (releasedKey.toolbar) {
+                    gesturePoints.clear();
+                    listener.onKey(releasedKey.key);
+                    return true;
+                }
+                gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY()));
+                String spaceSymbol = spaceSymbolForGesture(releasedKey);
+                Integer vowel = spaceSymbol == null ? gestureMapper.map(gesturePoints) : null;
                 gesturePoints.clear();
-                if (shouldHandleGesture(releasedKey.key, vowel)) {
+                if (spaceSymbol != null) {
+                    listener.onKey(KeySpec.character(spaceSymbol, spaceSymbol));
+                } else if (shouldHandleGesture(releasedKey.key, vowel)) {
                     listener.onGesture(releasedKey.key, vowel);
                 } else {
                     listener.onKey(releasedKey.key);
@@ -191,12 +213,7 @@ public class KeyboardSurfaceView extends View {
     private boolean canStartVowelGesture(KeySpec key) {
         return key.type == KeySpec.Type.HANGUL_CONSONANT
                 || key.type == KeySpec.Type.HANGUL_VOWEL
-                || key.type == KeySpec.Type.HANGUL_VOWELS
-                || isVowelGesturePad(key);
-    }
-
-    private boolean isVowelGesturePad(KeySpec key) {
-        return key.type == KeySpec.Type.NO_OP && "모음".equals(key.label);
+                || key.type == KeySpec.Type.HANGUL_VOWEL_PAD;
     }
 
     private void drawKey(Canvas canvas, KeySpec key, RectF rect, boolean pressed) {
@@ -206,6 +223,7 @@ public class KeyboardSurfaceView extends View {
         boolean special = key.type != KeySpec.Type.CHARACTER
                 && key.type != KeySpec.Type.HANGUL_CONSONANT
                 && key.type != KeySpec.Type.HANGUL_VOWEL
+                && key.type != KeySpec.Type.HANGUL_VOWEL_PAD
                 && key.type != KeySpec.Type.NO_OP;
         SettingsStore.KeyboardTheme theme = settings.theme;
 
@@ -220,6 +238,10 @@ public class KeyboardSurfaceView extends View {
 
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(special ? theme.hint : theme.text);
+        if (key.type == KeySpec.Type.SPACE) {
+            drawSpacePadKey(canvas, rect, theme);
+            return;
+        }
         if (key.hintTop != null && !key.hintTop.isEmpty()) {
             paint.setTextSize(dp(9));
             Paint.FontMetrics hintMetrics = paint.getFontMetrics();
@@ -256,25 +278,228 @@ public class KeyboardSurfaceView extends View {
         return label.length() > 2;
     }
 
+    private void drawToolbar(Canvas canvas, float toolbarHeight) {
+        SettingsStore.KeyboardTheme theme = settings.theme;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(theme.background);
+        canvas.drawRect(0, 0, getWidth(), toolbarHeight, paint);
+
+        float totalWeight = toolbarTotalWeight();
+        float left = 0f;
+        paint.setTextAlign(Paint.Align.CENTER);
+        for (int i = 0; i < TOOLBAR_LABELS.length; i++) {
+            float width = getWidth() * (TOOLBAR_WEIGHTS[i] / totalWeight);
+            float centerX = left + width / 2f;
+            if (i == 5) {
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(1f, dp(1)));
+                paint.setColor(theme.stroke);
+                float dividerX = centerX;
+                canvas.drawLine(dividerX, dp(12), dividerX, toolbarHeight - dp(12), paint);
+            } else if (i == 0) {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(theme.keyNormal);
+                canvas.drawCircle(centerX, toolbarHeight / 2f, Math.min(dp(22), toolbarHeight * 0.38f), paint);
+                paint.setColor(theme.text);
+                paint.setTextSize(dp(34));
+                drawCenteredText(canvas, TOOLBAR_LABELS[i], centerX - dp(1), toolbarHeight / 2f);
+            } else {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(theme.hint);
+                paint.setTextSize(i == 2 ? dp(18) : dp(25));
+                paint.setFakeBoldText(i == 2);
+                drawCenteredText(canvas, TOOLBAR_LABELS[i], centerX, toolbarHeight / 2f);
+                paint.setFakeBoldText(false);
+            }
+            left += width;
+        }
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(1f, dp(0.5f)));
+        paint.setColor(theme.stroke);
+        canvas.drawLine(0, toolbarHeight - dp(0.5f), getWidth(), toolbarHeight - dp(0.5f), paint);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawSpacePadKey(Canvas canvas, RectF rect, SettingsStore.KeyboardTheme theme) {
+        float symbolSize = Math.min(dp(24), rect.height() * 0.34f);
+        float topY = rect.top + rect.height() * 0.27f;
+        float bottomY = rect.top + rect.height() * 0.73f;
+        float leftX = rect.left + rect.width() * 0.22f;
+        float rightX = rect.right - rect.width() * 0.22f;
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(theme.text);
+        paint.setTextSize(symbolSize);
+        drawCenteredText(canvas, "!", leftX, topY);
+        drawCenteredText(canvas, "~", rect.centerX(), topY);
+        drawCenteredText(canvas, ",", rightX, topY);
+        drawCenteredText(canvas, "?", leftX, bottomY);
+        drawCenteredText(canvas, ".", rightX, bottomY);
+
+        float iconY = bottomY + rect.height() * 0.02f;
+        float halfWidth = Math.min(rect.width() * 0.12f, dp(28));
+        float rise = Math.max(dp(5), rect.height() * 0.10f);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(2f, dp(2)));
+        paint.setColor(theme.text);
+        canvas.drawLine(rect.centerX() - halfWidth, iconY, rect.centerX() + halfWidth, iconY, paint);
+        canvas.drawLine(rect.centerX() - halfWidth, iconY, rect.centerX() - halfWidth, iconY - rise, paint);
+        canvas.drawLine(rect.centerX() + halfWidth, iconY, rect.centerX() + halfWidth, iconY - rise, paint);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawCenteredText(Canvas canvas, String text, float x, float centerY) {
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        float baseline = centerY - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText(text, x, baseline, paint);
+    }
+
     private KeyBounds findKey(float x, float y) {
         float gap = dp(4);
-        float top = gap;
-        float rowHeight = (getHeight() - gap * (rows.size() + 1)) / rows.size();
+        float top = toolbarHeight() + gap;
+        float keyboardHeight = keyboardHeight();
+        float rowAreaHeight = keyboardHeight - toolbarHeight();
+        float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
         for (RowLayout row : rows) {
             float totalWeight = row.totalWeight();
             float left = gap;
             float availableWidth = getWidth() - gap * (row.keys.size() + 1);
-            for (KeySpec key : row.keys) {
+            for (int i = 0; i < row.keys.size(); i++) {
+                KeySpec key = row.keys.get(i);
                 float keyWidth = availableWidth * (key.weight / totalWeight);
                 RectF rect = new RectF(left, top, left + keyWidth, top + rowHeight);
-                if (rect.contains(x, y)) {
-                    return new KeyBounds(key, rect);
+                RectF touchRect = spanRect(row, i, rect, rowHeight, gap, availableWidth, totalWeight);
+                if (touchRect.contains(x, y)) {
+                    return new KeyBounds(key, touchRect);
                 }
                 left += keyWidth + gap;
             }
             top += rowHeight + gap;
         }
         return null;
+    }
+
+    private KeyBounds findToolbarKey(float x, float y) {
+        float toolbarHeight = toolbarHeight();
+        if (y < 0 || y > toolbarHeight) {
+            return null;
+        }
+        float totalWeight = toolbarTotalWeight();
+        float left = 0f;
+        for (int i = 0; i < TOOLBAR_LABELS.length; i++) {
+            float width = getWidth() * (TOOLBAR_WEIGHTS[i] / totalWeight);
+            RectF rect = new RectF(left, 0, left + width, toolbarHeight);
+            if (rect.contains(x, y)) {
+                return new KeyBounds(toolbarKeyForIndex(i), rect, true);
+            }
+            left += width;
+        }
+        return null;
+    }
+
+    private KeySpec toolbarKeyForIndex(int index) {
+        switch (index) {
+            case 0:
+                return KeySpec.command("", KeySpec.Type.HIDE_KEYBOARD);
+            case 1:
+                return KeySpec.command("", KeySpec.Type.MODE_SYMBOLS);
+            case 3:
+                return KeySpec.command("", KeySpec.Type.USEFUL_SENTENCE);
+            case 4:
+                return KeySpec.command("", KeySpec.Type.SETTINGS);
+            default:
+                return KeySpec.command("", KeySpec.Type.NO_OP);
+        }
+    }
+
+    private float toolbarTotalWeight() {
+        float total = 0f;
+        for (float weight : TOOLBAR_WEIGHTS) {
+            total += weight;
+        }
+        return total;
+    }
+
+    private int toolbarHeight() {
+        return dp(52);
+    }
+
+    private float keyboardHeight() {
+        return Math.max(dp(80), getHeight() - bottomSafeInset());
+    }
+
+    private float keyboardBottom(float gap) {
+        return keyboardHeight() - gap;
+    }
+
+    private int bottomSafeInset() {
+        return Math.max(bottomSystemInset + dp(8), dp(48));
+    }
+
+    private int bottomInsetFrom(WindowInsets insets) {
+        if (insets == null) {
+            return 0;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Insets navigationBars = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars());
+            Insets tappableElement = insets.getInsetsIgnoringVisibility(WindowInsets.Type.tappableElement());
+            return Math.max(navigationBars.bottom, tappableElement.bottom);
+        }
+        return Math.max(insets.getSystemWindowInsetBottom(), insets.getStableInsetBottom());
+    }
+
+    private RectF spanRect(RowLayout row, int index, RectF rect, float rowHeight, float gap,
+                           float availableWidth, float totalWeight) {
+        KeySpec key = row.keys.get(index);
+        if (key.rowSpan <= 1 && key.columnSpan <= 1) {
+            return rect;
+        }
+        float right = rect.right;
+        int lastColumn = Math.min(row.keys.size() - 1, index + key.columnSpan - 1);
+        for (int i = index + 1; i <= lastColumn; i++) {
+            KeySpec nextKey = row.keys.get(i);
+            right += gap + availableWidth * (nextKey.weight / totalWeight);
+        }
+        float bottom = rect.bottom + (key.rowSpan - 1) * (rowHeight + gap);
+        return new RectF(rect.left, rect.top, right, Math.min(bottom, keyboardBottom(gap)));
+    }
+
+    private String spaceSymbolForGesture(KeyBounds keyBounds) {
+        if (keyBounds.key.type != KeySpec.Type.SPACE || gesturePoints.size() < 2) {
+            return null;
+        }
+        GestureVowelMapper.Point start = gesturePoints.get(0);
+        GestureVowelMapper.Point end = gesturePoints.get(gesturePoints.size() - 1);
+        float dx = end.x - start.x;
+        float dy = end.y - start.y;
+        float minDistance = Math.max(dp(10), Math.min(keyBounds.rect.width(), keyBounds.rect.height()) * 0.18f);
+        if (Math.hypot(dx, dy) < minDistance) {
+            return null;
+        }
+
+        float relativeX = clamp((end.x - keyBounds.rect.left) / keyBounds.rect.width(), 0f, 1f);
+        float relativeY = clamp((end.y - keyBounds.rect.top) / keyBounds.rect.height(), 0f, 1f);
+        if (relativeY < 0.5f) {
+            if (relativeX < 0.34f) {
+                return "!";
+            }
+            if (relativeX > 0.66f) {
+                return ",";
+            }
+            return "~";
+        }
+        if (relativeX < 0.34f) {
+            return "?";
+        }
+        if (relativeX > 0.66f) {
+            return ".";
+        }
+        return null;
+    }
+
+    private float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(value, max));
     }
 
     private void buildRows() {
@@ -314,112 +539,59 @@ public class KeyboardSurfaceView extends View {
     }
 
     private void buildYunKeyboardVerticalRows() {
-        buildYunKeyboardImageRows();
+        buildGestureHangulPortraitRows(
+                Consonant.KIEUK, Consonant.GIYEOK, Consonant.SIOT, Consonant.JIEUT, Consonant.CHIEUT,
+                Consonant.HIEUT, Consonant.NIEUN, Consonant.IEUNG, Consonant.RIEUL, Consonant.MIEUM,
+                Consonant.TIEUT, Consonant.DIGEUT, Consonant.BIEUP, Consonant.PIEUP);
     }
 
     private void buildYunKeyboardHorizontalRows() {
-        buildYunKeyboardImageRows();
-    }
-
-    private void buildYunKeyboardImageRows() {
-        rows.add(row(
-                KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, 1.1f),
-                KeySpec.consonant(Consonant.KIEUK).withHints("1", null),
-                KeySpec.consonant(Consonant.GIYEOK).withHints("2", null),
-                KeySpec.consonant(Consonant.SIOT).withHints("3", null),
-                KeySpec.consonant(Consonant.JIEUT).withHints("4", null),
-                KeySpec.consonant(Consonant.CHIEUT).withHints("5", null),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
-        rows.add(row(
-                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.1f),
-                KeySpec.consonant(Consonant.HIEUT).withHints("6", null),
-                KeySpec.consonant(Consonant.NIEUN).withHints("7", null),
-                KeySpec.consonant(Consonant.IEUNG).withHints("8", null),
-                KeySpec.consonant(Consonant.RIEUL).withHints("9", null),
-                KeySpec.command("모음", KeySpec.Type.NO_OP, 1.0f).withHints("0", null)));
-        rows.add(row(
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
-                KeySpec.consonant(Consonant.TIEUT).withHints("내번호/메일", null),
-                KeySpec.consonant(Consonant.DIGEUT).withHints(".?!", null),
-                KeySpec.consonant(Consonant.MIEUM).withHints("♥", null),
-                KeySpec.consonant(Consonant.BIEUP).withHints("^^", null),
-                KeySpec.consonant(Consonant.PIEUP).withHints("상용구", null)));
-        rows.add(row(
-                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.1f),
-                KeySpec.command("←", KeySpec.Type.MOVE_LEFT),
-                KeySpec.command("→", KeySpec.Type.MOVE_RIGHT),
-                KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE, 3.0f).withHints("~   ,", null),
-                KeySpec.command("↵", KeySpec.Type.ENTER, 1.1f)));
+        buildYunKeyboardVerticalRows();
     }
 
     private void buildTwoBeolsikRows() {
-        if (hangulVowelPanel) {
-            buildTwoBeolsikVowelRows();
-        } else {
-            buildTwoBeolsikConsonantRows();
-        }
+        buildGestureHangulPortraitRows(
+                Consonant.BIEUP, Consonant.JIEUT, Consonant.DIGEUT, Consonant.GIYEOK, Consonant.SIOT,
+                Consonant.MIEUM, Consonant.NIEUN, Consonant.IEUNG, Consonant.RIEUL, Consonant.HIEUT,
+                Consonant.KIEUK, Consonant.TIEUT, Consonant.CHIEUT, Consonant.PIEUP);
     }
 
-    private void buildTwoBeolsikConsonantRows() {
+    private void buildGestureHangulPortraitRows(
+            Consonant row1First, Consonant row1Second, Consonant row1Third, Consonant row1Fourth, Consonant row1Fifth,
+            Consonant row2First, Consonant row2Second, Consonant row2Third, Consonant row2Fourth, Consonant row2Fifth,
+            Consonant row3First, Consonant row3Second, Consonant row3Third, Consonant row3Fourth) {
         rows.add(row(
-                KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, 1.1f),
-                KeySpec.consonant(Consonant.BIEUP).withHints("1", null),
-                KeySpec.consonant(Consonant.JIEUT).withHints("2", null),
-                KeySpec.consonant(Consonant.DIGEUT).withHints("3", null),
-                KeySpec.consonant(Consonant.GIYEOK).withHints("4", null),
-                KeySpec.consonant(Consonant.SIOT).withHints("5", null),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
+                KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.consonant(row1First).withHints("1", null),
+                KeySpec.consonant(row1Second).withHints("2", null),
+                KeySpec.consonant(row1Third).withHints("3", null),
+                KeySpec.consonant(row1Fourth).withHints("4", null),
+                KeySpec.consonant(row1Fifth).withHints("5", null),
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, HANGUL_RIGHT_KEY_WEIGHT).withRowSpan(3)));
         rows.add(row(
-                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.1f),
-                KeySpec.consonant(Consonant.MIEUM).withHints("6", null),
-                KeySpec.consonant(Consonant.NIEUN).withHints("7", null),
-                KeySpec.consonant(Consonant.IEUNG).withHints("8", null),
-                KeySpec.consonant(Consonant.RIEUL).withHints("9", null),
-                KeySpec.consonant(Consonant.HIEUT).withHints("0", null)));
+                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.consonant(row2First).withHints("6", null),
+                KeySpec.consonant(row2Second).withHints("7", null),
+                KeySpec.consonant(row2Third).withHints("8", null),
+                KeySpec.consonant(row2Fourth).withHints("9", null),
+                KeySpec.consonant(row2Fifth).withHints("0", null),
+                KeySpec.spacer(HANGUL_RIGHT_KEY_WEIGHT)));
         rows.add(row(
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
-                KeySpec.consonant(Consonant.KIEUK).withHints("내번호/메일", null),
-                KeySpec.consonant(Consonant.TIEUT).withHints(".?!", null),
-                KeySpec.consonant(Consonant.CHIEUT).withHints("♥", null),
-                KeySpec.consonant(Consonant.PIEUP).withHints("^.^", null),
-                KeySpec.command("모음", KeySpec.Type.HANGUL_VOWELS, 1.1f).withHints("상용구", null)));
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.consonant(row3First).withHints("내번호/메일", null),
+                KeySpec.consonant(row3Second).withHints(".?!", null),
+                KeySpec.consonant(row3Third).withHints("♥", null),
+                KeySpec.consonant(row3Fourth).withHints("^^", null),
+                KeySpec.vowelPad("모음", 1.0f).withHints("상용구", null),
+                KeySpec.spacer(HANGUL_RIGHT_KEY_WEIGHT)));
         rows.add(row(
-                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.1f),
+                KeySpec.command("⚙", KeySpec.Type.SETTINGS, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.command("←", KeySpec.Type.MOVE_LEFT),
                 KeySpec.command("→", KeySpec.Type.MOVE_RIGHT),
-                KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE, 3.0f).withHints("~   ,", null),
-                KeySpec.command("Go", KeySpec.Type.ENTER, 1.1f)));
-    }
-
-    private void buildTwoBeolsikVowelRows() {
-        rows.add(row(
-                KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, 1.1f),
-                KeySpec.vowel("ㅛ", HangulComposer.V_YO).withHints("1", null),
-                KeySpec.vowel("ㅕ", HangulComposer.V_YEO).withHints("2", null),
-                KeySpec.vowel("ㅑ", HangulComposer.V_YA).withHints("3", null),
-                KeySpec.vowel("ㅐ", HangulComposer.V_AE).withHints("4", null),
-                KeySpec.vowel("ㅔ", HangulComposer.V_E).withHints("5", null),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
-        rows.add(row(
-                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.1f),
-                KeySpec.vowel("ㅗ", HangulComposer.V_O).withHints("6", null),
-                KeySpec.vowel("ㅓ", HangulComposer.V_EO).withHints("7", null),
-                KeySpec.vowel("ㅏ", HangulComposer.V_A).withHints("8", null),
-                KeySpec.vowel("ㅣ", HangulComposer.V_I).withHints("9", null),
-                KeySpec.vowel("ㅖ", HangulComposer.V_YE).withHints("0", null)));
-        rows.add(row(
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
-                KeySpec.vowel("ㅠ", HangulComposer.V_YU),
-                KeySpec.vowel("ㅜ", HangulComposer.V_U),
-                KeySpec.vowel("ㅡ", HangulComposer.V_EU),
-                KeySpec.vowel("ㅒ", HangulComposer.V_YAE),
-                KeySpec.command("자음", KeySpec.Type.HANGUL_CONSONANTS, 1.1f).withHints("상용구", null)));
-        rows.add(row(
-                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.1f),
-                KeySpec.command("←", KeySpec.Type.MOVE_LEFT),
-                KeySpec.command("→", KeySpec.Type.MOVE_RIGHT),
-                KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE, 3.0f).withHints("~   ,", null),
-                KeySpec.command("Go", KeySpec.Type.ENTER, 1.1f)));
+                KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE).withHints("~   ,", null).withColumnSpan(2),
+                KeySpec.spacer(1.0f),
+                KeySpec.command("Go", KeySpec.Type.ENTER).withColumnSpan(2),
+                KeySpec.spacer(HANGUL_RIGHT_KEY_WEIGHT)));
     }
 
     private void buildHangulQwertyVerticalRows() {
@@ -510,12 +682,7 @@ public class KeyboardSurfaceView extends View {
     }
 
     private void buildEnglishRows() {
-        boolean hybridLandscape = settings.englishTypeIndex == 2 && isLandscape();
-        if (settings.englishTypeIndex == 1 || hybridLandscape) {
-            buildEnglishQwertyRows();
-        } else {
-            buildEnglishPalgeulRows();
-        }
+        buildEnglishQwertyRows();
     }
 
     private void buildEnglishQwertyRows() {
@@ -531,36 +698,39 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("o", "9", "ㅐ"),
                 qwertyKey("p", "0", "ㅔ")));
         rows.add(row(
-                qwertyKey("a", "+", "ㅁ"),
-                qwertyKey("s", "-", "ㄴ"),
-                qwertyKey("d", "*", "ㅇ"),
-                qwertyKey("f", "/", "ㄹ"),
-                qwertyKey("g", "=", "ㅎ"),
-                qwertyKey("h", "&", "ㅗ"),
-                qwertyKey("j", "^", "ㅓ"),
-                qwertyKey("k", "@", "ㅏ"),
-                qwertyKey("l", "~", "ㅣ")));
+                KeySpec.spacer(0.5f),
+                qwertyKey("a", "`", "ㅁ"),
+                qwertyKey("s", "#", "ㄴ"),
+                qwertyKey("d", "$", "ㅇ"),
+                qwertyKey("f", "%", "ㄹ"),
+                qwertyKey("g", "(", "ㅎ"),
+                qwertyKey("h", ")", "ㅗ"),
+                qwertyKey("j", "'", "ㅓ"),
+                qwertyKey("k", "\"", "ㅏ"),
+                qwertyKey("l", "|", "ㅣ"),
+                KeySpec.spacer(0.5f)));
         rows.add(row(
-                KeySpec.command(shift ? "SHIFT" : "shift", KeySpec.Type.SHIFT, 1.4f),
-                qwertyKey("z", ":", "ㅋ"),
-                qwertyKey("x", ";", "ㅌ"),
-                qwertyKey("c", "-", "ㅊ"),
-                qwertyKey("v", "'", "ㅍ"),
-                qwertyKey("b", ".", "ㅠ"),
-                qwertyKey("n", "?", "ㅜ"),
-                qwertyKey("m", "!", "ㅡ"),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.4f)));
+                KeySpec.command("⇧\nA", KeySpec.Type.SHIFT, 1.5f),
+                qwertyKey("z", "<", "ㅋ"),
+                qwertyKey("x", ">", "ㅌ"),
+                qwertyKey("c", "[", "ㅊ"),
+                qwertyKey("v", "]", "ㅍ"),
+                qwertyKey("b", "{", "ㅠ"),
+                qwertyKey("n", "}", "ㅜ"),
+                qwertyKey("m", "\\", "ㅡ"),
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.5f)));
         rows.add(row(
-                KeySpec.command("ㄱㄴㄷ", KeySpec.Type.MODE_HANGUL, 1.2f),
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.2f),
-                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.2f),
-                KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE, 4.6f).withHints("~   ,", null),
-                KeySpec.command("↵", KeySpec.Type.ENTER, 1.2f)));
+                KeySpec.command("ㄱㄴㄷ", KeySpec.Type.MODE_HANGUL, 1.15f),
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.15f),
+                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.15f),
+                KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE, 3.55f).withHints("~   ,", null),
+                KeySpec.command("↵", KeySpec.Type.ENTER, 3.0f)));
     }
 
     private KeySpec qwertyKey(String value, String topHint, String bottomHint) {
-        String text = shift ? value.toUpperCase() : value;
-        return KeySpec.character(text, text).withHints(topHint, bottomHint);
+        String label = value.toUpperCase();
+        String outputText = shift ? value.toUpperCase() : value;
+        return KeySpec.character(label, outputText).withHints(topHint, bottomHint);
     }
 
     private void buildEnglishPalgeulRows() {
@@ -631,18 +801,6 @@ public class KeyboardSurfaceView extends View {
     }
 
     private void buildNumberRows() {
-        if (settings.numberTypeIndex == 1) {
-            buildComputerNumberRows();
-        } else {
-            buildPhoneNumberRows();
-        }
-    }
-
-    private void buildPhoneNumberRows() {
-        buildImageNumberRows();
-    }
-
-    private void buildComputerNumberRows() {
         buildImageNumberRows();
     }
 
@@ -673,10 +831,6 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.command("↵", KeySpec.Type.ENTER)));
     }
 
-    private boolean isLandscape() {
-        return getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
-    }
-
     private RowLayout row(KeySpec... keys) {
         RowLayout row = new RowLayout();
         row.keys.addAll(Arrays.asList(keys));
@@ -702,10 +856,16 @@ public class KeyboardSurfaceView extends View {
     private static class KeyBounds {
         final KeySpec key;
         final RectF rect;
+        final boolean toolbar;
 
         KeyBounds(KeySpec key, RectF rect) {
+            this(key, rect, false);
+        }
+
+        KeyBounds(KeySpec key, RectF rect, boolean toolbar) {
             this.key = key;
             this.rect = rect;
+            this.toolbar = toolbar;
         }
     }
 }
