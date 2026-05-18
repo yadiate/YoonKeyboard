@@ -59,6 +59,7 @@
   - 자음 키에서 드래그하면 `자음+모음`을 입력한다.
   - 모음 키나 `모음` 전환 키에서 드래그하면 모음만 입력한다.
   - 손가락 흔들림으로 단순 드래그가 누락되지 않도록 전체 이동 방향 fallback을 추가했다.
+  - 2벌식 세로 화면의 짧은 드래그도 잡히도록 시작점-끝점 기반 fallback 기준을 더 낮췄다.
 - 2026-05-19에 원본 APK의 `godic_hangul_*` XML을 기준으로 한글 레이아웃을 다시 맞췄다.
   - 윤키보드/2벌식 세로 화면은 원본처럼 삭제 키를 첫 행 오른쪽에 둔다.
   - 2벌식 가로 화면은 원본 `hangul_qwerty_land`처럼 자음+모음 한 화면 배열을 사용한다.
@@ -100,15 +101,15 @@ PowerShell에서 프로젝트 루트 기준:
 현재 APK 출력:
 
 ```text
-app\build\outputs\apk\release\EightWayIme-layout-v5.apk
+app\build\outputs\apk\release\EightWayIme-drag-v6.apk
 ```
 
 현재 빌드 정보:
 
 - applicationId: `com.example.eightwayime`
 - namespace: `com.example.eightwayime`
-- versionCode: `5`
-- versionName: `0.2.3`
+- versionCode: `6`
+- versionName: `0.2.4`
 - minSdk: `21`
 - targetSdk: `35`
 - compileSdk: `35`
@@ -116,12 +117,12 @@ app\build\outputs\apk\release\EightWayIme-layout-v5.apk
 현재 APK SHA256:
 
 ```text
-5F0BBB5D9C2C544DCBED293EFE8DD69638F774DE59189742BB5969FAB21FD155
+6DB249C06F8FF3EA839D7470B415394027DDF98E72C7D0E4785C39B333881D91
 ```
 
 ## 배포 상태
 
-- Google Drive에 업로드된 APK는 이전 v2 빌드다. 최신 v5 로컬 빌드는 아직 Drive에 올리지 않았다.
+- Google Drive에 업로드된 APK는 이전 v2 빌드다. 최신 v6 로컬 빌드는 아직 Drive에 올리지 않았다.
 - Google Drive 파일:
   - `EightWayIme-settings-v2.apk`
   - https://drive.google.com/file/d/1wCH5RJMaQq1WZ4FM3_Tta9Lvb1B1k5_f/view?usp=drivesdk
