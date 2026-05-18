@@ -2,6 +2,7 @@ package com.example.eightwayime.ime;
 
 import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -46,6 +47,8 @@ public class KeyboardSurfaceView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final List<RowLayout> rows = new ArrayList<>();
     private final List<GestureVowelMapper.Point> gesturePoints = new ArrayList<>();
+    private final List<ClipboardClip> clipboardClips = new ArrayList<>();
+    private final List<ClipboardCard> clipboardCards = new ArrayList<>();
     private final GestureVowelMapper gestureMapper;
     private SettingsStore.Snapshot settings;
     private KeyboardActionListener listener;
@@ -57,6 +60,7 @@ public class KeyboardSurfaceView extends View {
     private boolean bottomSafeInsetEnabled = true;
     private boolean clipboardContextVisible;
     private String clipboardContextPreview = "";
+    private final RectF clipboardCloseRect = new RectF();
     private KeyBounds pressedKey;
     private Runnable longPressRunnable;
     private Runnable keyPreviewRunnable;
@@ -115,11 +119,23 @@ public class KeyboardSurfaceView extends View {
     }
 
     public void showClipboardContext(String previewText) {
+        List<ClipboardClip> clips = new ArrayList<>();
+        if (previewText != null && !previewText.trim().isEmpty()) {
+            clips.add(new ClipboardClip(0, previewText, "텍스트", null, false));
+        }
+        showClipboardContext(clips, previewText);
+    }
+
+    public void showClipboardContext(List<ClipboardClip> clips, String emptyMessage) {
         cancelScheduledLongPress();
         cancelScheduledKeyPreview();
         keyPreviewVisible = false;
         clipboardContextVisible = true;
-        clipboardContextPreview = previewText == null ? "" : previewText;
+        clipboardContextPreview = emptyMessage == null ? "" : emptyMessage;
+        clipboardClips.clear();
+        if (clips != null) {
+            clipboardClips.addAll(clips);
+        }
         buildRows();
         requestLayout();
         invalidate();
@@ -131,6 +147,9 @@ public class KeyboardSurfaceView extends View {
         }
         clipboardContextVisible = false;
         clipboardContextPreview = "";
+        clipboardClips.clear();
+        clipboardCards.clear();
+        clipboardCloseRect.setEmpty();
         buildRows();
         requestLayout();
         invalidate();
@@ -153,6 +172,9 @@ public class KeyboardSurfaceView extends View {
         }
         clipboardContextVisible = false;
         clipboardContextPreview = "";
+        clipboardClips.clear();
+        clipboardCards.clear();
+        clipboardCloseRect.setEmpty();
         this.mode = mode;
         this.shift = false;
         buildRows();
