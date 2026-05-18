@@ -1,0 +1,88 @@
+package com.example.eightwayime.ime;
+
+import com.example.eightwayime.hangul.Consonant;
+
+public class KeySpec {
+    public enum Type {
+        CHARACTER,
+        HANGUL_CONSONANT,
+        HANGUL_VOWEL,
+        MODE_HANGUL,
+        MODE_ENGLISH,
+        MODE_SYMBOLS,
+        MODE_NUMBERS,
+        SHIFT,
+        DELETE,
+        SPACE,
+        ENTER,
+        SETTINGS,
+        USEFUL_SENTENCE,
+        MY_INFO,
+        MOVE_LEFT,
+        MOVE_RIGHT,
+        HANGUL_CONSONANTS,
+        HANGUL_VOWELS,
+        NO_OP
+    }
+
+    public final String label;
+    public final String hintTop;
+    public final String hintBottom;
+    public final Type type;
+    public final String outputText;
+    public final Consonant consonant;
+    public final int vowelIndex;
+    public final float weight;
+
+    private KeySpec(String label, Type type, String outputText, Consonant consonant, int vowelIndex, float weight) {
+        this(label, null, null, type, outputText, consonant, vowelIndex, weight);
+    }
+
+    private KeySpec(String label, String hintTop, String hintBottom, Type type, String outputText,
+                    Consonant consonant, int vowelIndex, float weight) {
+        this.label = label;
+        this.hintTop = hintTop;
+        this.hintBottom = hintBottom;
+        this.type = type;
+        this.outputText = outputText;
+        this.consonant = consonant;
+        this.vowelIndex = vowelIndex;
+        this.weight = weight;
+    }
+
+    public static KeySpec command(String label, Type type) {
+        return new KeySpec(label, type, null, null, -1, 1f);
+    }
+
+    public static KeySpec command(String label, Type type, float weight) {
+        return new KeySpec(label, type, null, null, -1, weight);
+    }
+
+    public static KeySpec character(String label, String outputText) {
+        return new KeySpec(label, Type.CHARACTER, outputText, null, -1, 1f);
+    }
+
+    public static KeySpec character(String label, String outputText, float weight) {
+        return new KeySpec(label, Type.CHARACTER, outputText, null, -1, weight);
+    }
+
+    public static KeySpec consonant(Consonant consonant) {
+        return new KeySpec(consonant.label(), Type.HANGUL_CONSONANT, null, consonant, -1, 1f);
+    }
+
+    public static KeySpec consonant(Consonant consonant, float weight) {
+        return new KeySpec(consonant.label(), Type.HANGUL_CONSONANT, null, consonant, -1, weight);
+    }
+
+    public static KeySpec vowel(String label, int vowelIndex) {
+        return new KeySpec(label, Type.HANGUL_VOWEL, null, null, vowelIndex, 1f);
+    }
+
+    public static KeySpec spacer(float weight) {
+        return new KeySpec("", Type.NO_OP, null, null, -1, weight);
+    }
+
+    public KeySpec withHints(String hintTop, String hintBottom) {
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight);
+    }
+}

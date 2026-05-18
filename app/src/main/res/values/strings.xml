@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">윤키보드</string>
+    <string name="subtype_korean">한국어 윤키보드</string>
+    <string name="open_input_settings">키보드 사용 설정 열기</string>
+    <string name="show_keyboard_picker">키보드 선택창 열기</string>
+    <string name="settings_title">윤키보드</string>
+    <string name="settings_body">윤키보드 제스처와 2벌식 자판을 세로/가로 옵션으로 고를 수 있는 한국어 키보드입니다. 앱을 활성화한 뒤 입력창에서 이 키보드를 선택하세요.</string>
+</resources>
