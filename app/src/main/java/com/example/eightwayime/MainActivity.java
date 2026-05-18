@@ -89,38 +89,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showHangulPage(boolean animate, int direction) {
-        backAction = () -> showMainPage(true, -1);
-        root.removeAllViews();
-        addDetailHeader("한글 자판", backAction);
-        addSectionTitle("방향");
-        LinearLayout card = addCard();
-        addChoiceRow(card, "세로 화면", SettingsStore.HANGUL_TYPES,
-                SettingsStore.KEY_HANGUL_PORTRAIT_TYPE, 0, () -> showHangulPage(true, -1));
-        addDivider(card);
-        addChoiceRow(card, "가로 화면", SettingsStore.HANGUL_TYPES,
-                SettingsStore.KEY_HANGUL_LANDSCAPE_TYPE, 0, () -> showHangulPage(true, -1));
-        if (animate) {
-            animatePageFrom(direction);
-        }
-    }
-
-    private void showEnglishPage(boolean animate, int direction) {
-        backAction = () -> showMainPage(true, -1);
-        root.removeAllViews();
-        addDetailHeader("영문 자판", backAction);
-        addSectionTitle("방향");
-        LinearLayout card = addCard();
-        addChoiceRow(card, "세로 화면", SettingsStore.ENGLISH_TYPES,
-                SettingsStore.KEY_ENGLISH_PORTRAIT_TYPE, 1, () -> showEnglishPage(true, -1));
-        addDivider(card);
-        addChoiceRow(card, "가로 화면", SettingsStore.ENGLISH_TYPES,
-                SettingsStore.KEY_ENGLISH_LANDSCAPE_TYPE, 1, () -> showEnglishPage(true, -1));
-        if (animate) {
-            animatePageFrom(direction);
-        }
-    }
-
     private void showChoicePage(String title, String[] values, String key, int defaultValue, Runnable parentPage) {
         backAction = parentPage;
         root.removeAllViews();
@@ -306,17 +274,6 @@ public class MainActivity extends Activity {
         addSectionTitle("자판");
         LinearLayout card = addCard();
         addChoiceRow(card, "스킨", SettingsStore.SKINS, SettingsStore.KEY_SKIN, 0,
-                () -> showMainPage(true, -1));
-        addDivider(card);
-        addActionRow(card, "한글 자판", keyboardSummary(SettingsStore.HANGUL_TYPES,
-                SettingsStore.KEY_HANGUL_PORTRAIT_TYPE, SettingsStore.KEY_HANGUL_LANDSCAPE_TYPE, 0),
-                () -> showHangulPage(true, 1));
-        addDivider(card);
-        addActionRow(card, "영문 자판", keyboardSummary(SettingsStore.ENGLISH_TYPES,
-                SettingsStore.KEY_ENGLISH_PORTRAIT_TYPE, SettingsStore.KEY_ENGLISH_LANDSCAPE_TYPE, 1),
-                () -> showEnglishPage(true, 1));
-        addDivider(card);
-        addChoiceRow(card, "숫자 자판", SettingsStore.NUMBER_TYPES, SettingsStore.KEY_NUMBER_TYPE, 0,
                 () -> showMainPage(true, -1));
     }
 
@@ -532,12 +489,6 @@ public class MainActivity extends Activity {
     private int strokeSeekValue(int progress, int minTenths, int maxTenths) {
         int value = minTenths + progress * SettingsStore.CUSTOM_STROKE_STEP_TENTHS;
         return Math.max(minTenths, Math.min(value, maxTenths));
-    }
-
-    private String keyboardSummary(String[] values, String portraitKey, String landscapeKey, int defaultValue) {
-        String portrait = values[currentIndex(portraitKey, values, defaultValue)];
-        String landscape = values[currentIndex(landscapeKey, values, defaultValue)];
-        return "세로: " + portrait + " · 가로: " + landscape;
     }
 
     private String strokeLengthSummary() {

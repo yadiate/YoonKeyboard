@@ -9,13 +9,6 @@ public class SettingsStore {
     public static final String PREF_NAME = "eight_way_ime_settings";
 
     public static final String KEY_SKIN = "keyboard_skin_type";
-    public static final String KEY_HANGUL_TYPE = "keyboard_type_hangul";
-    public static final String KEY_HANGUL_PORTRAIT_TYPE = "keyboard_type_hangul_portrait";
-    public static final String KEY_HANGUL_LANDSCAPE_TYPE = "keyboard_type_hangul_landscape";
-    public static final String KEY_ENGLISH_TYPE = "keyboard_type_eng";
-    public static final String KEY_ENGLISH_PORTRAIT_TYPE = "keyboard_type_eng_portrait";
-    public static final String KEY_ENGLISH_LANDSCAPE_TYPE = "keyboard_type_eng_landscape";
-    public static final String KEY_NUMBER_TYPE = "keyboard_type_num";
     public static final String KEY_STROKE_LENGTH = "stroke_length";
     public static final String KEY_STROKE_CUSTOM = "stroke_custom_enabled";
     public static final String KEY_STROKE_SHORT_MM_TENTHS = "stroke_short_mm_tenths";
@@ -36,9 +29,6 @@ public class SettingsStore {
     public static final int SKIN_SYSTEM = 2;
 
     public static final String[] SKINS = {"화이트", "블랙", "시스템 설정 따라가기"};
-    public static final String[] HANGUL_TYPES = {"윤키보드", "2벌식"};
-    public static final String[] ENGLISH_TYPES = {"윤키보드", "Qwerty"};
-    public static final String[] NUMBER_TYPES = {"전화기패드", "컴퓨터패드"};
     public static final String[] STROKE_LENGTHS = {"1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] VIBRATE_LEVELS = {"꺼짐", "1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] DOUBLE_TAP_TIMES = {"1-짧게", "2-보통", "3-길게"};
@@ -49,13 +39,6 @@ public class SettingsStore {
     public static final int CUSTOM_STROKE_STEP_TENTHS = 5;
 
     private static final int DEFAULT_SKIN = 0;
-    private static final int DEFAULT_HANGUL_TYPE = 0;
-    private static final int DEFAULT_HANGUL_PORTRAIT_TYPE = 0;
-    private static final int DEFAULT_HANGUL_LANDSCAPE_TYPE = 0;
-    private static final int DEFAULT_ENGLISH_TYPE = 1;
-    private static final int DEFAULT_ENGLISH_PORTRAIT_TYPE = 1;
-    private static final int DEFAULT_ENGLISH_LANDSCAPE_TYPE = 1;
-    private static final int DEFAULT_NUMBER_TYPE = 0;
     private static final int DEFAULT_STROKE_LENGTH = 2;
     private static final int DEFAULT_DOUBLE_TAP_TIME = 1;
     private static final int DEFAULT_VIBRATE_LEVEL = 1;
@@ -73,20 +56,7 @@ public class SettingsStore {
         SharedPreferences prefs = prefs(context);
         Snapshot snapshot = new Snapshot();
         snapshot.skinIndex = bounded(prefs.getInt(KEY_SKIN, DEFAULT_SKIN), SKINS.length, DEFAULT_SKIN);
-        snapshot.hangulPortraitTypeIndex = loadOrientationType(prefs, KEY_HANGUL_PORTRAIT_TYPE, HANGUL_TYPES.length,
-                defaultHangulPortraitType(prefs));
-        snapshot.hangulLandscapeTypeIndex = loadOrientationType(prefs, KEY_HANGUL_LANDSCAPE_TYPE, HANGUL_TYPES.length,
-                defaultHangulLandscapeType(prefs));
-        snapshot.hangulTypeIndex = effectiveHangulType(context, snapshot.hangulPortraitTypeIndex,
-                snapshot.hangulLandscapeTypeIndex);
-        snapshot.englishPortraitTypeIndex = loadOrientationType(prefs, KEY_ENGLISH_PORTRAIT_TYPE, ENGLISH_TYPES.length,
-                defaultEnglishPortraitType(prefs));
-        snapshot.englishLandscapeTypeIndex = loadOrientationType(prefs, KEY_ENGLISH_LANDSCAPE_TYPE, ENGLISH_TYPES.length,
-                defaultEnglishLandscapeType(prefs));
-        snapshot.englishTypeIndex = isLandscape(context)
-                ? snapshot.englishLandscapeTypeIndex
-                : snapshot.englishPortraitTypeIndex;
-        snapshot.numberTypeIndex = bounded(prefs.getInt(KEY_NUMBER_TYPE, DEFAULT_NUMBER_TYPE), NUMBER_TYPES.length, DEFAULT_NUMBER_TYPE);
+        snapshot.hangulTypeIndex = isLandscape(context) ? HANGUL_TYPE_YUN_HORIZONTAL : HANGUL_TYPE_YUN_VERTICAL;
         snapshot.strokeLengthIndex = bounded(prefs.getInt(KEY_STROKE_LENGTH, DEFAULT_STROKE_LENGTH), STROKE_LENGTHS.length, DEFAULT_STROKE_LENGTH);
         snapshot.customStrokeLength = true;
         int defaultShortStroke = defaultShortStrokeMmTenths(snapshot.strokeLengthIndex);
@@ -176,40 +146,6 @@ public class SettingsStore {
         return (tenths / 10) + "." + Math.abs(tenths % 10) + "mm";
     }
 
-    private static int loadOrientationType(SharedPreferences prefs, String key, int count, int fallback) {
-        return bounded(prefs.getInt(key, fallback), count, fallback);
-    }
-
-    private static int defaultHangulPortraitType(SharedPreferences prefs) {
-        int legacy = prefs.getInt(KEY_HANGUL_TYPE, DEFAULT_HANGUL_TYPE);
-        return legacy == HANGUL_TYPE_TWO_BEOLSIK_VERTICAL ? 1 : DEFAULT_HANGUL_PORTRAIT_TYPE;
-    }
-
-    private static int defaultHangulLandscapeType(SharedPreferences prefs) {
-        int legacy = prefs.getInt(KEY_HANGUL_TYPE, DEFAULT_HANGUL_TYPE);
-        return legacy == HANGUL_TYPE_TWO_BEOLSIK_VERTICAL || legacy == HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL ? 1
-                : DEFAULT_HANGUL_LANDSCAPE_TYPE;
-    }
-
-    private static int defaultEnglishPortraitType(SharedPreferences prefs) {
-        int legacy = prefs.getInt(KEY_ENGLISH_TYPE, DEFAULT_ENGLISH_TYPE);
-        return legacy == 0 ? 0 : DEFAULT_ENGLISH_PORTRAIT_TYPE;
-    }
-
-    private static int defaultEnglishLandscapeType(SharedPreferences prefs) {
-        int legacy = prefs.getInt(KEY_ENGLISH_TYPE, DEFAULT_ENGLISH_TYPE);
-        return legacy == 0 ? 0 : DEFAULT_ENGLISH_LANDSCAPE_TYPE;
-    }
-
-    private static int effectiveHangulType(Context context, int portraitType, int landscapeType) {
-        boolean useLandscape = isLandscape(context);
-        int selected = useLandscape ? landscapeType : portraitType;
-        if (selected == 1) {
-            return useLandscape ? HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL : HANGUL_TYPE_TWO_BEOLSIK_VERTICAL;
-        }
-        return useLandscape ? HANGUL_TYPE_YUN_HORIZONTAL : HANGUL_TYPE_YUN_VERTICAL;
-    }
-
     private static boolean isLandscape(Context context) {
         return context.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
     }
@@ -238,12 +174,6 @@ public class SettingsStore {
     public static class Snapshot {
         public int skinIndex;
         public int hangulTypeIndex;
-        public int hangulPortraitTypeIndex;
-        public int hangulLandscapeTypeIndex;
-        public int englishTypeIndex;
-        public int englishPortraitTypeIndex;
-        public int englishLandscapeTypeIndex;
-        public int numberTypeIndex;
         public int strokeLengthIndex;
         public boolean customStrokeLength;
         public int shortStrokeMmTenths;

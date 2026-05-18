@@ -24,8 +24,6 @@ Clean-room Android keyboard prototype based on the feature shape of the provided
 - English, symbol, and number modes.
 - Settings screen based on the analyzed APK feature set:
   - skin/theme selection
-  - Korean keyboard selection with 윤키보드/2벌식 and vertical/horizontal variants
-  - English and number keyboard type selection
   - stroke length sensitivity
   - double-consonant timing setting placeholder
   - vibration and sound toggles
