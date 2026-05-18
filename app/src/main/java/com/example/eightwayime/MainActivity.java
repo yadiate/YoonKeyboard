@@ -1883,6 +1883,10 @@ public class MainActivity extends Activity {
         }
 
         private void drawResizeChrome(Canvas canvas) {
+            if (adjustmentMode == MODE_LAYOUT) {
+                drawLayoutChrome(canvas);
+                return;
+            }
             int accent = Color.rgb(20, 145, 245);
             RectF bounds = previewBounds();
 
@@ -1917,6 +1921,72 @@ public class MainActivity extends Activity {
             drawHandle(canvas, keyboardRect.right, keyboardRect.centerY());
 
             drawEdgePercentLabels(canvas, bounds);
+        }
+
+        private void drawLayoutChrome(Canvas canvas) {
+            int accent = Color.rgb(20, 145, 245);
+            RectF bounds = previewBounds();
+            float leftLineX = layoutLineX(layoutLeftPercent);
+            float rightLineX = layoutLineX(layoutRightPercent);
+
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(dp(1.4f));
+            previewPaint.setColor(Color.rgb(176, 184, 192));
+            canvas.drawRect(bounds, previewPaint);
+
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(dp(2));
+            previewPaint.setColor(accent);
+            canvas.drawRect(keyboardRect, previewPaint);
+
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(Color.argb(34, 20, 145, 245));
+            canvas.drawRect(keyboardRect.left, keyboardRect.top, leftLineX, keyboardRect.bottom, previewPaint);
+            canvas.drawRect(rightLineX, keyboardRect.top, keyboardRect.right, keyboardRect.bottom, previewPaint);
+
+            drawLayoutDivider(canvas, leftLineX, true);
+            drawLayoutDivider(canvas, rightLineX, false);
+            drawLayoutPercentLabels(canvas, leftLineX, rightLineX);
+        }
+
+        private void drawLayoutDivider(Canvas canvas, float x, boolean activeLeftDivider) {
+            boolean active = activeHandle == (activeLeftDivider ? HANDLE_LAYOUT_LEFT : HANDLE_LAYOUT_RIGHT);
+            int accent = active ? Color.rgb(0, 102, 230) : Color.rgb(20, 145, 245);
+            float top = keyboardRect.top + dp(8);
+            float bottom = keyboardRect.bottom - dp(8);
+
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(active ? dp(3.2f) : dp(2.4f));
+            previewPaint.setColor(accent);
+            canvas.drawLine(x, top, x, bottom, previewPaint);
+
+            float handleWidth = dp(52);
+            float handleHeight = dp(26);
+            RectF handle = new RectF(x - handleWidth / 2f, keyboardRect.centerY() - handleHeight / 2f,
+                    x + handleWidth / 2f, keyboardRect.centerY() + handleHeight / 2f);
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(Color.WHITE);
+            canvas.drawRoundRect(handle, dp(13), dp(13), previewPaint);
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(dp(1.2f));
+            previewPaint.setColor(accent);
+            canvas.drawRoundRect(handle, dp(13), dp(13), previewPaint);
+
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setTextAlign(Paint.Align.CENTER);
+            previewPaint.setTextSize(dp(18));
+            previewPaint.setColor(accent);
+            drawPreviewText(canvas, "↔", handle.centerX(), handle.centerY());
+        }
+
+        private void drawLayoutPercentLabels(Canvas canvas, float leftLineX, float rightLineX) {
+            int leftSpan = layoutLeftPercent;
+            int centerSpan = layoutRightPercent - layoutLeftPercent;
+            int rightSpan = 100 - layoutRightPercent;
+            float labelY = keyboardRect.bottom + dp(18);
+            drawPercentLabel(canvas, "좌 " + leftSpan + "%", (keyboardRect.left + leftLineX) / 2f, labelY, Gravity.CENTER);
+            drawPercentLabel(canvas, "중 " + centerSpan + "%", (leftLineX + rightLineX) / 2f, labelY, Gravity.CENTER);
+            drawPercentLabel(canvas, "우 " + rightSpan + "%", (rightLineX + keyboardRect.right) / 2f, labelY, Gravity.CENTER);
         }
 
         private void drawEdgePercentLabels(Canvas canvas, RectF bounds) {
@@ -2005,6 +2075,29 @@ public class MainActivity extends Activity {
             return BUTTON_NONE;
         }
 
+        private int currentModeHandleAt(float x, float y) {
+            if (adjustmentMode == MODE_LAYOUT) {
+                return layoutHandleAt(x, y);
+            }
+            return handleAt(x, y);
+        }
+
+        private int layoutHandleAt(float x, float y) {
+            if (y < keyboardRect.top - dp(12) || y > keyboardRect.bottom + dp(12)) {
+                return HANDLE_NONE;
+            }
+            float hit = dp(34);
+            float leftLineX = layoutLineX(layoutLeftPercent);
+            float rightLineX = layoutLineX(layoutRightPercent);
+            if (Math.abs(x - leftLineX) <= hit) {
+                return HANDLE_LAYOUT_LEFT;
+            }
+            if (Math.abs(x - rightLineX) <= hit) {
+                return HANDLE_LAYOUT_RIGHT;
+            }
+            return HANDLE_NONE;
+        }
+
         private int handleAt(float x, float y) {
             float hit = dp(32);
             if (distance(x, y, keyboardRect.left, keyboardRect.top) <= hit) {
@@ -2057,6 +2150,21 @@ public class MainActivity extends Activity {
             saveSize();
             requestLayout();
             invalidate();
+        }
+
+        private void updateLayoutFromHandle(float x) {
+            int xPercent = percentForPosition(x, keyboardRect.left, keyboardRect.width());
+            if (activeHandle == HANDLE_LAYOUT_LEFT) {
+                layoutLeftPercent = SettingsStore.boundedKeyboardLayoutLeftPercent(xPercent, layoutRightPercent);
+            } else if (activeHandle == HANDLE_LAYOUT_RIGHT) {
+                layoutRightPercent = SettingsStore.boundedKeyboardLayoutRightPercent(xPercent, layoutLeftPercent);
+            }
+            saveSize();
+            invalidate();
+        }
+
+        private float layoutLineX(int percent) {
+            return keyboardRect.left + keyboardRect.width() * percent / 100f;
         }
 
         private int percentForPosition(float value, float start, float size) {
