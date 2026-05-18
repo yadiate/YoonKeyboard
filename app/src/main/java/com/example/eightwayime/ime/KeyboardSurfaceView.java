@@ -104,11 +104,6 @@ public class KeyboardSurfaceView extends View {
                 || settings.hangulTypeIndex == SettingsStore.HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL;
     }
 
-    private boolean usesGestureVowels() {
-        return settings.hangulTypeIndex == SettingsStore.HANGUL_TYPE_YUN_VERTICAL
-                || settings.hangulTypeIndex == SettingsStore.HANGUL_TYPE_YUN_HORIZONTAL;
-    }
-
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         int width = MeasureSpec.getSize(widthMeasureSpec);
@@ -167,11 +162,12 @@ public class KeyboardSurfaceView extends View {
                 pressedKey = null;
                 invalidate();
                 if (releasedKey == null || listener == null) {
+                    gesturePoints.clear();
                     return true;
                 }
                 Integer vowel = gestureMapper.map(gesturePoints);
-                if (vowel != null && mode == KeyboardMode.HANGUL && usesGestureVowels()
-                        && releasedKey.key.type == KeySpec.Type.HANGUL_CONSONANT) {
+                gesturePoints.clear();
+                if (shouldHandleGesture(releasedKey.key, vowel)) {
                     listener.onGesture(releasedKey.key, vowel);
                 } else {
                     listener.onKey(releasedKey.key);
@@ -185,6 +181,23 @@ public class KeyboardSurfaceView extends View {
             default:
                 return super.onTouchEvent(event);
         }
+    }
+
+    private boolean shouldHandleGesture(KeySpec key, Integer vowel) {
+        return vowel != null
+                && mode == KeyboardMode.HANGUL
+                && canStartVowelGesture(key);
+    }
+
+    private boolean canStartVowelGesture(KeySpec key) {
+        return key.type == KeySpec.Type.HANGUL_CONSONANT
+                || key.type == KeySpec.Type.HANGUL_VOWEL
+                || key.type == KeySpec.Type.HANGUL_VOWELS
+                || isVowelGesturePad(key);
+    }
+
+    private boolean isVowelGesturePad(KeySpec key) {
+        return key.type == KeySpec.Type.NO_OP && "모음".equals(key.label);
     }
 
     private void drawKey(Canvas canvas, KeySpec key, RectF rect, boolean pressed) {
@@ -292,7 +305,7 @@ public class KeyboardSurfaceView extends View {
                 buildYunKeyboardHorizontalRows();
                 break;
             case SettingsStore.HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL:
-                buildTwoBeolsikRows();
+                buildHangulQwertyRows();
                 break;
             case SettingsStore.HANGUL_TYPE_YUN_VERTICAL:
             default:
@@ -317,15 +330,14 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.consonant(Consonant.SIOT).withHints("3", null),
                 KeySpec.consonant(Consonant.JIEUT).withHints("4", null),
                 KeySpec.consonant(Consonant.CHIEUT).withHints("5", null),
-                KeySpec.spacer(1.1f)));
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(
                 KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.1f),
                 KeySpec.consonant(Consonant.HIEUT).withHints("6", null),
                 KeySpec.consonant(Consonant.NIEUN).withHints("7", null),
                 KeySpec.consonant(Consonant.IEUNG).withHints("8", null),
                 KeySpec.consonant(Consonant.RIEUL).withHints("9", null),
-                KeySpec.command("모음", KeySpec.Type.NO_OP, 1.0f).withHints("0", null),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
+                KeySpec.command("모음", KeySpec.Type.NO_OP, 1.0f).withHints("0", null)));
         rows.add(row(
                 KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
                 KeySpec.consonant(Consonant.TIEUT).withHints("내번호/메일", null),
@@ -357,15 +369,14 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.consonant(Consonant.DIGEUT).withHints("3", null),
                 KeySpec.consonant(Consonant.GIYEOK).withHints("4", null),
                 KeySpec.consonant(Consonant.SIOT).withHints("5", null),
-                KeySpec.spacer(1.1f)));
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(
                 KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.1f),
                 KeySpec.consonant(Consonant.MIEUM).withHints("6", null),
                 KeySpec.consonant(Consonant.NIEUN).withHints("7", null),
                 KeySpec.consonant(Consonant.IEUNG).withHints("8", null),
                 KeySpec.consonant(Consonant.RIEUL).withHints("9", null),
-                KeySpec.consonant(Consonant.HIEUT).withHints("0", null),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
+                KeySpec.consonant(Consonant.HIEUT).withHints("0", null)));
         rows.add(row(
                 KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
                 KeySpec.consonant(Consonant.KIEUK).withHints("내번호/메일", null),
@@ -389,15 +400,14 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.vowel("ㅑ", HangulComposer.V_YA).withHints("3", null),
                 KeySpec.vowel("ㅐ", HangulComposer.V_AE).withHints("4", null),
                 KeySpec.vowel("ㅔ", HangulComposer.V_E).withHints("5", null),
-                KeySpec.spacer(1.1f)));
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(
                 KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.1f),
                 KeySpec.vowel("ㅗ", HangulComposer.V_O).withHints("6", null),
                 KeySpec.vowel("ㅓ", HangulComposer.V_EO).withHints("7", null),
                 KeySpec.vowel("ㅏ", HangulComposer.V_A).withHints("8", null),
                 KeySpec.vowel("ㅣ", HangulComposer.V_I).withHints("9", null),
-                KeySpec.vowel("ㅖ", HangulComposer.V_YE).withHints("0", null),
-                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
+                KeySpec.vowel("ㅖ", HangulComposer.V_YE).withHints("0", null)));
         rows.add(row(
                 KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
                 KeySpec.vowel("ㅠ", HangulComposer.V_YU),
@@ -459,11 +469,11 @@ public class KeyboardSurfaceView extends View {
 
     private void buildHangulQwertyRows() {
         rows.add(row(
-                KeySpec.consonant(shift ? Consonant.SSANG_BIEUP : Consonant.BIEUP),
-                KeySpec.consonant(shift ? Consonant.SSANG_JIEUT : Consonant.JIEUT),
-                KeySpec.consonant(shift ? Consonant.SSANG_DIGEUT : Consonant.DIGEUT),
-                KeySpec.consonant(shift ? Consonant.SSANG_GIYEOK : Consonant.GIYEOK),
-                KeySpec.consonant(shift ? Consonant.SSANG_SIOT : Consonant.SIOT),
+                KeySpec.consonant(Consonant.BIEUP),
+                KeySpec.consonant(Consonant.JIEUT),
+                KeySpec.consonant(Consonant.DIGEUT),
+                KeySpec.consonant(Consonant.GIYEOK),
+                KeySpec.consonant(Consonant.SIOT),
                 KeySpec.vowel("ㅛ", HangulComposer.V_YO),
                 KeySpec.vowel("ㅕ", HangulComposer.V_YEO),
                 KeySpec.vowel("ㅑ", HangulComposer.V_YA),
@@ -480,7 +490,7 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.vowel("ㅏ", HangulComposer.V_A),
                 KeySpec.vowel("ㅣ", HangulComposer.V_I)));
         rows.add(row(
-                KeySpec.command(shift ? "SHIFT" : "shift", KeySpec.Type.SHIFT, 1.4f),
+                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.1f),
                 KeySpec.consonant(Consonant.KIEUK),
                 KeySpec.consonant(Consonant.TIEUT),
                 KeySpec.consonant(Consonant.CHIEUT),
@@ -488,12 +498,15 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.vowel("ㅠ", HangulComposer.V_YU),
                 KeySpec.vowel("ㅜ", HangulComposer.V_U),
                 KeySpec.vowel("ㅡ", HangulComposer.V_EU),
-                KeySpec.command("⌫", KeySpec.Type.DELETE, 1.4f)));
+                KeySpec.character(".,", "."),
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(
-                KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, 1.2f),
-                KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, 1.2f),
-                KeySpec.command("문구", KeySpec.Type.USEFUL_SENTENCE, 1.2f),
+                KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, 1.05f),
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.05f),
+                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.05f),
                 KeySpec.command("space", KeySpec.Type.SPACE, 4.0f),
+                KeySpec.command("←", KeySpec.Type.MOVE_LEFT),
+                KeySpec.command("→", KeySpec.Type.MOVE_RIGHT),
                 KeySpec.command("↵", KeySpec.Type.ENTER, 1.2f)));
     }
 

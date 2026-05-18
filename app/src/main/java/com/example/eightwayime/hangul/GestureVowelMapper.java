@@ -66,9 +66,22 @@ public class GestureVowelMapper {
             return null;
         }
 
-        boolean longSingle = pointsDistanceMm(start, points.get(points.size() - 1)) > longGestureMm;
+        Point end = points.get(points.size() - 1);
+        boolean longSingle = pointsDistanceMm(start, end) > longGestureMm;
         boolean longFirst = firstDirectionDistance > longGestureMm;
-        return mapDirections(directions, longSingle, longFirst);
+        Integer mapped = mapDirections(directions, longSingle, longFirst);
+        if (mapped != null) {
+            return mapped;
+        }
+
+        float totalDx = xDistanceMm(start, end);
+        float totalDy = yDistanceMm(start, end);
+        if (Math.hypot(totalDx, totalDy) < minSegmentMm) {
+            return null;
+        }
+        List<Direction> overallDirection = new ArrayList<>();
+        overallDirection.add(directionFor(totalDx, totalDy));
+        return mapDirections(overallDirection, longSingle, longSingle);
     }
 
     private Integer mapDirections(List<Direction> directions, boolean longSingle, boolean longFirst) {
