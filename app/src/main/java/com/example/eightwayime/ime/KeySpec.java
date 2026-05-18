@@ -40,13 +40,15 @@ public class KeySpec {
     public final float weight;
     public final int rowSpan;
     public final int columnSpan;
+    public final int clipboardIndex;
 
     private KeySpec(String label, Type type, String outputText, Consonant consonant, int vowelIndex, float weight) {
-        this(label, null, null, type, outputText, consonant, vowelIndex, weight, 1, 1);
+        this(label, null, null, type, outputText, consonant, vowelIndex, weight, 1, 1, -1);
     }
 
     private KeySpec(String label, String hintTop, String hintBottom, Type type, String outputText,
-                    Consonant consonant, int vowelIndex, float weight, int rowSpan, int columnSpan) {
+                    Consonant consonant, int vowelIndex, float weight, int rowSpan, int columnSpan,
+                    int clipboardIndex) {
         this.label = label;
         this.hintTop = hintTop;
         this.hintBottom = hintBottom;
@@ -57,6 +59,7 @@ public class KeySpec {
         this.weight = weight;
         this.rowSpan = Math.max(1, rowSpan);
         this.columnSpan = Math.max(1, columnSpan);
+        this.clipboardIndex = clipboardIndex;
     }
 
     public static KeySpec command(String label, Type type) {
@@ -73,6 +76,11 @@ public class KeySpec {
 
     public static KeySpec character(String label, String outputText, float weight) {
         return new KeySpec(label, Type.CHARACTER, outputText, null, -1, weight);
+    }
+
+    public static KeySpec clipboardPaste(String label, int clipboardIndex, float weight) {
+        return new KeySpec(label, null, null, Type.CLIPBOARD_PASTE, null, null, -1, weight, 1, 1,
+                clipboardIndex);
     }
 
     public static KeySpec consonant(Consonant consonant) {
@@ -96,14 +104,17 @@ public class KeySpec {
     }
 
     public KeySpec withHints(String hintTop, String hintBottom) {
-        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan, columnSpan);
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
+                columnSpan, clipboardIndex);
     }
 
     public KeySpec withRowSpan(int rowSpan) {
-        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan, columnSpan);
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
+                columnSpan, clipboardIndex);
     }
 
     public KeySpec withColumnSpan(int columnSpan) {
-        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan, columnSpan);
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
+                columnSpan, clipboardIndex);
     }
 }
