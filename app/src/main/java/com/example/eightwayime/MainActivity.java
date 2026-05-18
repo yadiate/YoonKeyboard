@@ -323,15 +323,6 @@ public class MainActivity extends Activity {
     private void addFeedbackSection() {
         addSectionTitle("입력");
         LinearLayout card = addCard();
-        addChoiceRow(card, "한글 모양", SettingsStore.FONTS, SettingsStore.KEY_HANGUL_FONT, 0,
-                () -> showMainPage(true, -1));
-        addDivider(card);
-        addChoiceRow(card, "영문 모양", SettingsStore.FONTS, SettingsStore.KEY_ENGLISH_FONT, 0,
-                () -> showMainPage(true, -1));
-        addDivider(card);
-        addChoiceRow(card, "숫자 모양", SettingsStore.FONTS, SettingsStore.KEY_NUMBER_FONT, 0,
-                () -> showMainPage(true, -1));
-        addDivider(card);
         addStrokeLengthRow(card);
         addDivider(card);
         addChoiceRow(card, "쌍자음 인식 속도", SettingsStore.DOUBLE_TAP_TIMES,
@@ -345,11 +336,6 @@ public class MainActivity extends Activity {
                 SettingsStore.KEY_VIBRATE_LEVEL, 1, () -> showMainPage(true, -1));
         addDivider(feedbackCard);
         addSwitchRow(feedbackCard, "소리", "키 입력음을 재생합니다.", SettingsStore.KEY_SOUND_ON, false);
-        addDivider(feedbackCard);
-        addSwitchRow(feedbackCard, "음성 인식 버튼", "음성 입력 버튼을 표시합니다.", SettingsStore.KEY_SPEECH_ON, false);
-        addDivider(feedbackCard);
-        addSwitchRow(feedbackCard, "음성 인식 후 키보드 유지", "음성 입력 후에도 키보드를 열어 둡니다.",
-                SettingsStore.KEY_KEYPAD_UP_AFTER_SPEECH, true);
     }
 
     private void addSnippetSection() {

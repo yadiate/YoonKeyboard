@@ -127,7 +127,6 @@ public class KeyboardSurfaceView extends View {
         float top = gap;
         float rowHeight = (getHeight() - gap * (rows.size() + 1)) / rows.size();
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(settings.typefaceForMode(mode.ordinal()));
 
         for (RowLayout row : rows) {
             float totalWeight = row.totalWeight();

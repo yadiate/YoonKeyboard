@@ -4,7 +4,6 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
-import android.graphics.Typeface;
 
 public class SettingsStore {
     public static final String PREF_NAME = "eight_way_ime_settings";
@@ -17,9 +16,6 @@ public class SettingsStore {
     public static final String KEY_ENGLISH_PORTRAIT_TYPE = "keyboard_type_eng_portrait";
     public static final String KEY_ENGLISH_LANDSCAPE_TYPE = "keyboard_type_eng_landscape";
     public static final String KEY_NUMBER_TYPE = "keyboard_type_num";
-    public static final String KEY_HANGUL_FONT = "keyboard_hangul_font";
-    public static final String KEY_ENGLISH_FONT = "keyboard_eng_font";
-    public static final String KEY_NUMBER_FONT = "keyboard_num_font";
     public static final String KEY_STROKE_LENGTH = "stroke_length";
     public static final String KEY_STROKE_CUSTOM = "stroke_custom_enabled";
     public static final String KEY_STROKE_SHORT_MM_TENTHS = "stroke_short_mm_tenths";
@@ -28,8 +24,6 @@ public class SettingsStore {
     public static final String KEY_VIBRATE_ON = "vibrate_on";
     public static final String KEY_VIBRATE_LEVEL = "vibrate_level";
     public static final String KEY_SOUND_ON = "sound_on";
-    public static final String KEY_SPEECH_ON = "speech_on";
-    public static final String KEY_KEYPAD_UP_AFTER_SPEECH = "keypad_up_after_speech_recog";
     public static final String KEY_SENTENCE_PREFIX = "sentence";
     public static final String KEY_MY_INFO_PREFIX = "myinfo";
 
@@ -45,11 +39,6 @@ public class SettingsStore {
     public static final String[] HANGUL_TYPES = {"윤키보드", "2벌식"};
     public static final String[] ENGLISH_TYPES = {"윤키보드", "Qwerty"};
     public static final String[] NUMBER_TYPES = {"전화기패드", "컴퓨터패드"};
-    public static final String[] FONTS = {
-            "고딕", "경기천년바탕검정", "경기천년바탕네온", "경기천년바탕흰색",
-            "제주고딕검정", "제주고딕네온", "제주고딕민트", "제주고딕보라",
-            "제주고딕오렌지", "제주고딕초록", "제주고딕파랑", "제주고딕흰색"
-    };
     public static final String[] STROKE_LENGTHS = {"1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] VIBRATE_LEVELS = {"꺼짐", "1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] DOUBLE_TAP_TIMES = {"1-짧게", "2-보통", "3-길게"};
@@ -67,7 +56,6 @@ public class SettingsStore {
     private static final int DEFAULT_ENGLISH_PORTRAIT_TYPE = 1;
     private static final int DEFAULT_ENGLISH_LANDSCAPE_TYPE = 1;
     private static final int DEFAULT_NUMBER_TYPE = 0;
-    private static final int DEFAULT_FONT = 0;
     private static final int DEFAULT_STROKE_LENGTH = 2;
     private static final int DEFAULT_DOUBLE_TAP_TIME = 1;
     private static final int DEFAULT_VIBRATE_LEVEL = 1;
@@ -99,9 +87,6 @@ public class SettingsStore {
                 ? snapshot.englishLandscapeTypeIndex
                 : snapshot.englishPortraitTypeIndex;
         snapshot.numberTypeIndex = bounded(prefs.getInt(KEY_NUMBER_TYPE, DEFAULT_NUMBER_TYPE), NUMBER_TYPES.length, DEFAULT_NUMBER_TYPE);
-        snapshot.hangulFontIndex = bounded(prefs.getInt(KEY_HANGUL_FONT, DEFAULT_FONT), FONTS.length, DEFAULT_FONT);
-        snapshot.englishFontIndex = bounded(prefs.getInt(KEY_ENGLISH_FONT, DEFAULT_FONT), FONTS.length, DEFAULT_FONT);
-        snapshot.numberFontIndex = bounded(prefs.getInt(KEY_NUMBER_FONT, DEFAULT_FONT), FONTS.length, DEFAULT_FONT);
         snapshot.strokeLengthIndex = bounded(prefs.getInt(KEY_STROKE_LENGTH, DEFAULT_STROKE_LENGTH), STROKE_LENGTHS.length, DEFAULT_STROKE_LENGTH);
         snapshot.customStrokeLength = true;
         int defaultShortStroke = defaultShortStrokeMmTenths(snapshot.strokeLengthIndex);
@@ -114,8 +99,6 @@ public class SettingsStore {
         snapshot.vibrateOn = prefs.getBoolean(KEY_VIBRATE_ON, true);
         snapshot.vibrateLevelIndex = bounded(prefs.getInt(KEY_VIBRATE_LEVEL, DEFAULT_VIBRATE_LEVEL), VIBRATE_LEVELS.length, DEFAULT_VIBRATE_LEVEL);
         snapshot.soundOn = prefs.getBoolean(KEY_SOUND_ON, false);
-        snapshot.speechOn = prefs.getBoolean(KEY_SPEECH_ON, false);
-        snapshot.keypadUpAfterSpeech = prefs.getBoolean(KEY_KEYPAD_UP_AFTER_SPEECH, true);
         snapshot.theme = themeFor(context, snapshot.skinIndex);
         return snapshot;
     }
@@ -261,9 +244,6 @@ public class SettingsStore {
         public int englishPortraitTypeIndex;
         public int englishLandscapeTypeIndex;
         public int numberTypeIndex;
-        public int hangulFontIndex;
-        public int englishFontIndex;
-        public int numberFontIndex;
         public int strokeLengthIndex;
         public boolean customStrokeLength;
         public int shortStrokeMmTenths;
@@ -272,8 +252,6 @@ public class SettingsStore {
         public boolean vibrateOn;
         public int vibrateLevelIndex;
         public boolean soundOn;
-        public boolean speechOn;
-        public boolean keypadUpAfterSpeech;
         public KeyboardTheme theme;
 
         public int vibrateDurationMs() {
@@ -287,24 +265,6 @@ public class SettingsStore {
 
         public float longStrokeMm() {
             return longStrokeMmTenths / 10f;
-        }
-
-        public Typeface typefaceForMode(int modeOrdinal) {
-            int fontIndex;
-            if (modeOrdinal == 0) {
-                fontIndex = hangulFontIndex;
-            } else if (modeOrdinal == 3) {
-                fontIndex = numberFontIndex;
-            } else {
-                fontIndex = englishFontIndex;
-            }
-            if (fontIndex >= 1 && fontIndex <= 3) {
-                return Typeface.create(Typeface.SERIF, fontIndex == 1 ? Typeface.BOLD : Typeface.NORMAL);
-            }
-            if (fontIndex == 4 || fontIndex == 11) {
-                return Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD);
-            }
-            return Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
         }
     }
 
