@@ -4,10 +4,21 @@
 
 ## 프로젝트 개요
 
-- 목표: 제공된 `윤키보드_base.apk`의 기능 형태를 분석해, 새 안드로이드 키보드 앱을 클린룸 방식으로 구현한다.
+- 목표: 제공된 `팔방미글_base.apk`의 기능 형태를 분석해, 새 안드로이드 키보드 앱을 클린룸 방식으로 구현한다.
 - 현재 프로젝트 위치: `C:\Users\yadia\Documents\Codex\2026-05-18\apk\EightWayIme`
-- 원본 APK 위치: `C:\Users\yadia\Downloads\윤키보드_base.apk`
+- 원본 APK 위치: `C:\Users\yadia\Downloads\팔방미글_base.apk`
+- GitHub 저장소명과 앱 문서 일부에서는 프로젝트명을 `YoonKeyboard`/`윤키보드`로 사용 중이다.
 - 원본 APK 코드, 리소스, 이미지, 라이선스 로직은 복사하지 않는다. 분석한 UX/기능 구조만 참고한다.
+
+## Git 상태
+
+- 브랜치: `main`
+- 원격: `origin` = `https://github.com/yadiate/YoonKeyboard.git`
+- 최신 푸시 커밋:
+  - `6dfb865` `Improve vertical two-beolsik drag input`
+  - `860553f` `Restore Korean keyboard layouts`
+  - `9eba96c` `Initial YoonKeyboard implementation`
+- 2026-05-19 기준 `HEAD`와 `origin/main`은 `6dfb8657e98eef2db400cc8682b9815b417e8a7a`로 일치했다.
 
 ## 원본 APK 분석 요약
 
@@ -60,6 +71,10 @@
   - 모음 키나 `모음` 전환 키에서 드래그하면 모음만 입력한다.
   - 손가락 흔들림으로 단순 드래그가 누락되지 않도록 전체 이동 방향 fallback을 추가했다.
   - 2벌식 세로 화면의 짧은 드래그도 잡히도록 시작점-끝점 기반 fallback 기준을 더 낮췄다.
+- 2벌식 세로 드래그 입력 관련 주의:
+  - `KeyboardSurfaceView.shouldHandleGesture()`에서 한글 모드 전체의 제스처를 허용해야 한다.
+  - 예전처럼 윤키보드 모드만 허용하는 `usesGestureVowels()` 조건을 되살리면 2벌식 드래그가 다시 막힌다.
+  - `GestureVowelMapper.mapOverallDirection()`은 실제 폰의 짧고 촘촘한 드래그 이벤트를 잡기 위한 보강이다.
 - 2026-05-19에 원본 APK의 `godic_hangul_*` XML을 기준으로 한글 레이아웃을 다시 맞췄다.
   - 윤키보드/2벌식 세로 화면은 원본처럼 삭제 키를 첫 행 오른쪽에 둔다.
   - 2벌식 가로 화면은 원본 `hangul_qwerty_land`처럼 자음+모음 한 화면 배열을 사용한다.
@@ -101,6 +116,7 @@ PowerShell에서 프로젝트 루트 기준:
 현재 APK 출력:
 
 ```text
+app\build\outputs\apk\release\app-release.apk
 app\build\outputs\apk\release\EightWayIme-drag-v6.apk
 ```
 
@@ -119,6 +135,17 @@ app\build\outputs\apk\release\EightWayIme-drag-v6.apk
 ```text
 6DB249C06F8FF3EA839D7470B415394027DDF98E72C7D0E4785C39B333881D91
 ```
+
+## 최근 검증
+
+- `.\gradlew.bat assembleRelease` 성공.
+- `apksigner verify --verbose app\build\outputs\apk\release\EightWayIme-drag-v6.apk` 성공.
+- 서명 결과:
+  - v1: true
+  - v2: true
+  - v3/v3.1/v4: false
+  - SourceStamp: false
+- 현재 릴리즈 빌드는 디버그 keystore로 서명된다. 실제 출시 전에는 정식 release/upload key가 필요하다.
 
 ## 배포 상태
 
