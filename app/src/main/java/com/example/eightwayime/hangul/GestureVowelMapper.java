@@ -14,6 +14,7 @@ public class GestureVowelMapper {
     private float yPixelsPerMm = 1f;
     private float minSegmentMm = 3.6f;
     private float longGestureMm = 13.5f;
+    private GestureCalibration.Profile calibrationProfile;
 
     public GestureVowelMapper(DisplayMetrics metrics) {
         setDisplayMetrics(metrics);
@@ -32,7 +33,17 @@ public class GestureVowelMapper {
         this.longGestureMm = Math.max(this.minSegmentMm + 1f, longGestureMm);
     }
 
+    public void setCalibrationProfile(GestureCalibration.Profile calibrationProfile) {
+        this.calibrationProfile = calibrationProfile != null && calibrationProfile.hasData()
+                ? calibrationProfile
+                : null;
+    }
+
     public Integer map(List<Point> points) {
+        return map(points, null);
+    }
+
+    public Integer map(List<Point> points, Consonant consonant) {
         if (points.size() < 2) {
             return null;
         }
@@ -49,7 +60,7 @@ public class GestureVowelMapper {
             if (Math.hypot(dx, dy) < minSegmentMm) {
                 continue;
             }
-            Direction direction = directionFor(dx, dy);
+            Direction direction = directionFor(dx, dy, consonant);
             if (directions.isEmpty() || directions.get(directions.size() - 1) != direction) {
                 directions.add(direction);
             }
@@ -64,14 +75,15 @@ public class GestureVowelMapper {
 
         Point end = points.get(points.size() - 1);
         float totalDistance = pointsDistanceMm(start, end);
-        boolean longSingle = totalDistance > longGestureMm;
+        Direction overallDirection = directionFor(xDistanceMm(start, end), yDistanceMm(start, end), consonant);
+        boolean longSingle = isLongGesture(overallDirection, totalDistance, consonant);
 
-        Integer overall = mapOverallDirection(start, end, totalDistance, longSingle);
+        Integer overall = mapOverallDirection(start, end, totalDistance, longSingle, consonant);
         if (directions.isEmpty()) {
             return overall;
         }
 
-        boolean longFirst = firstDirectionDistance > longGestureMm;
+        boolean longFirst = isLongGesture(firstDirection, firstDirectionDistance, consonant);
         Integer mapped = mapDirections(directions, longSingle, longFirst);
         if (mapped != null) {
             return mapped;
@@ -79,7 +91,26 @@ public class GestureVowelMapper {
         return overall;
     }
 
-    private Integer mapOverallDirection(Point start, Point end, float totalDistanceMm, boolean longSingle) {
+    public Trace trace(List<Point> points) {
+        if (points.size() < 2) {
+            return new Trace(0f, 0f, 0f, 0f, 0f, 0L);
+        }
+        Point start = points.get(0);
+        Point end = points.get(points.size() - 1);
+        float dx = xDistanceMm(start, end);
+        float dy = yDistanceMm(start, end);
+        float distance = (float) Math.hypot(dx, dy);
+        float path = 0f;
+        for (int i = 1; i < points.size(); i++) {
+            path += pointsDistanceMm(points.get(i - 1), points.get(i));
+        }
+        long duration = (start.timeMs > 0L && end.timeMs >= start.timeMs) ? end.timeMs - start.timeMs : 0L;
+        float angle = (float) Math.toDegrees(Math.atan2(dy, dx));
+        return new Trace(dx, dy, distance, angle, path, duration);
+    }
+
+    private Integer mapOverallDirection(Point start, Point end, float totalDistanceMm, boolean longSingle,
+                                        Consonant consonant) {
         float fallbackMinMm = Math.max(1f, minSegmentMm * 0.55f);
         if (totalDistanceMm < fallbackMinMm) {
             return null;
@@ -87,7 +118,7 @@ public class GestureVowelMapper {
         float totalDx = xDistanceMm(start, end);
         float totalDy = yDistanceMm(start, end);
         List<Direction> overallDirection = new ArrayList<>();
-        overallDirection.add(directionFor(totalDx, totalDy));
+        overallDirection.add(directionFor(totalDx, totalDy, consonant));
         return mapDirections(overallDirection, longSingle, longSingle);
     }
 
@@ -158,30 +189,92 @@ public class GestureVowelMapper {
         return direction == Direction.UP || direction == Direction.DOWN;
     }
 
+    private boolean isLongGesture(Direction direction, float distanceMm, Consonant consonant) {
+        if (direction == null) {
+            return distanceMm > longGestureMm;
+        }
+        if (calibrationProfile != null) {
+            if (direction == Direction.RIGHT || direction == Direction.LEFT) {
+                return distanceMm > calibrationProfile.longHorizontalMm(consonant, longGestureMm);
+            }
+            if (direction == Direction.UP || direction == Direction.DOWN) {
+                return distanceMm > calibrationProfile.longVerticalMm(consonant, longGestureMm);
+            }
+        }
+        return distanceMm > longGestureMm;
+    }
+
     private Direction directionFor(float dx, float dy) {
+        return directionFor(dx, dy, null);
+    }
+
+    private Direction directionFor(float dx, float dy, Consonant consonant) {
         double angle = Math.toDegrees(Math.atan2(dy, dx));
+        Direction fallback;
         if (angle >= -22.5 && angle < 22.5) {
-            return Direction.RIGHT;
+            fallback = Direction.RIGHT;
+        } else if (angle >= 22.5 && angle < 67.5) {
+            fallback = Direction.DOWN_RIGHT;
+        } else if (angle >= 67.5 && angle < 112.5) {
+            fallback = Direction.DOWN;
+        } else if (angle >= 112.5 && angle < 157.5) {
+            fallback = Direction.DOWN_LEFT;
+        } else if (angle >= -67.5 && angle < -22.5) {
+            fallback = Direction.UP_RIGHT;
+        } else if (angle >= -112.5 && angle < -67.5) {
+            fallback = Direction.UP;
+        } else if (angle >= -157.5 && angle < -112.5) {
+            fallback = Direction.UP_LEFT;
+        } else {
+            fallback = Direction.LEFT;
         }
-        if (angle >= 22.5 && angle < 67.5) {
-            return Direction.DOWN_RIGHT;
+        Direction calibrated = calibratedDiagonalDirection((float) angle, (float) Math.hypot(dx, dy), consonant);
+        return calibrated == null ? fallback : calibrated;
+    }
+
+    private Direction calibratedDiagonalDirection(float angle, float distanceMm, Consonant consonant) {
+        if (calibrationProfile == null) {
+            return null;
         }
-        if (angle >= 67.5 && angle < 112.5) {
-            return Direction.DOWN;
+        Direction bestDirection = null;
+        float bestScore = Float.MAX_VALUE;
+        for (GestureCalibration.DirectionClass directionClass : diagonalClasses()) {
+            GestureCalibration.DirectionProfile profile = calibrationProfile.directionProfile(consonant, directionClass);
+            if (profile == null || distanceMm < profile.minDistanceMm) {
+                continue;
+            }
+            float diff = Math.abs(GestureCalibration.angleDiff(angle, profile.centerAngle));
+            float score = diff / Math.max(1f, profile.tolerance);
+            if (score <= 1f && score < bestScore) {
+                bestScore = score;
+                bestDirection = directionForClass(directionClass);
+            }
         }
-        if (angle >= 112.5 && angle < 157.5) {
-            return Direction.DOWN_LEFT;
+        return bestDirection;
+    }
+
+    private GestureCalibration.DirectionClass[] diagonalClasses() {
+        return new GestureCalibration.DirectionClass[]{
+                GestureCalibration.DirectionClass.TOP_RIGHT,
+                GestureCalibration.DirectionClass.TOP_LEFT,
+                GestureCalibration.DirectionClass.BOTTOM_RIGHT,
+                GestureCalibration.DirectionClass.BOTTOM_LEFT
+        };
+    }
+
+    private Direction directionForClass(GestureCalibration.DirectionClass directionClass) {
+        switch (directionClass) {
+            case TOP_RIGHT:
+                return Direction.UP_RIGHT;
+            case TOP_LEFT:
+                return Direction.UP_LEFT;
+            case BOTTOM_RIGHT:
+                return Direction.DOWN_RIGHT;
+            case BOTTOM_LEFT:
+                return Direction.DOWN_LEFT;
+            default:
+                return Direction.RIGHT;
         }
-        if (angle >= -67.5 && angle < -22.5) {
-            return Direction.UP_RIGHT;
-        }
-        if (angle >= -112.5 && angle < -67.5) {
-            return Direction.UP;
-        }
-        if (angle >= -157.5 && angle < -112.5) {
-            return Direction.UP_LEFT;
-        }
-        return Direction.LEFT;
     }
 
     private boolean reasonableDpi(float dpi) {
@@ -203,10 +296,34 @@ public class GestureVowelMapper {
     public static class Point {
         public final float x;
         public final float y;
+        public final long timeMs;
 
         public Point(float x, float y) {
+            this(x, y, 0L);
+        }
+
+        public Point(float x, float y, long timeMs) {
             this.x = x;
             this.y = y;
+            this.timeMs = timeMs;
+        }
+    }
+
+    public static class Trace {
+        public final float dxMm;
+        public final float dyMm;
+        public final float distanceMm;
+        public final float angleDegrees;
+        public final float pathMm;
+        public final long durationMs;
+
+        Trace(float dxMm, float dyMm, float distanceMm, float angleDegrees, float pathMm, long durationMs) {
+            this.dxMm = dxMm;
+            this.dyMm = dyMm;
+            this.distanceMm = distanceMm;
+            this.angleDegrees = angleDegrees;
+            this.pathMm = pathMm;
+            this.durationMs = durationMs;
         }
     }
 }

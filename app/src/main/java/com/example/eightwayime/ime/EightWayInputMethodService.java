@@ -1,11 +1,14 @@
 package com.example.eightwayime.ime;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.inputmethodservice.InputMethodService;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
@@ -13,19 +16,24 @@ import android.view.inputmethod.InputConnection;
 
 import com.example.eightwayime.MainActivity;
 import com.example.eightwayime.SettingsStore;
+import com.example.eightwayime.hangul.GestureCalibration;
 import com.example.eightwayime.hangul.HangulComposer;
 
-public class EightWayInputMethodService extends InputMethodService implements KeyboardActionListener {
+public class EightWayInputMethodService extends InputMethodService
+        implements KeyboardActionListener, KeyboardSurfaceView.GestureTraceListener {
     private final HangulComposer composer = new HangulComposer();
     private KeyboardSurfaceView keyboardView;
     private KeyboardMode mode = KeyboardMode.HANGUL;
     private SettingsStore.Snapshot settings;
+    private String currentEditorPackage = "";
+    private boolean currentEditorIsPassword;
 
     @Override
     public View onCreateInputView() {
         settings = SettingsStore.load(this);
         keyboardView = new KeyboardSurfaceView(this);
         keyboardView.setListener(this);
+        keyboardView.setGestureTraceListener(this);
         keyboardView.setSettings(settings);
         keyboardView.setMode(mode);
         return keyboardView;
@@ -34,6 +42,8 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        currentEditorPackage = attribute == null || attribute.packageName == null ? "" : attribute.packageName;
+        currentEditorIsPassword = isPasswordInput(attribute);
         settings = SettingsStore.load(this);
         if (keyboardView != null) {
             keyboardView.setSettings(settings);
@@ -44,6 +54,8 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
     @Override
     public void onFinishInput() {
         commitComposingText();
+        currentEditorPackage = "";
+        currentEditorIsPassword = false;
         super.onFinishInput();
     }
 
@@ -82,6 +94,16 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
             case MODE_NUMBERS:
                 switchMode(KeyboardMode.NUMBERS);
                 break;
+            case SYMBOL_PAGE_PREV:
+                if (keyboardView != null) {
+                    keyboardView.showPreviousSymbolPage();
+                }
+                break;
+            case SYMBOL_PAGE_NEXT:
+                if (keyboardView != null) {
+                    keyboardView.showNextSymbolPage();
+                }
+                break;
             case SHIFT:
                 if (keyboardView != null) {
                     keyboardView.setShift(!keyboardView.isShift());
@@ -111,6 +133,20 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
             case MY_INFO:
                 commitStoredText(SettingsStore.firstNonEmptyMyInfo(this));
                 break;
+            case CLIPBOARD_CONTEXT:
+                showClipboardContext();
+                break;
+            case CLIPBOARD_PASTE:
+                pasteFromClipboard();
+                if (keyboardView != null) {
+                    keyboardView.hideClipboardContext();
+                }
+                break;
+            case CLIPBOARD_CLOSE:
+                if (keyboardView != null) {
+                    keyboardView.hideClipboardContext();
+                }
+                break;
             case MOVE_LEFT:
                 moveCursor(KeyEvent.KEYCODE_DPAD_LEFT);
                 break;
@@ -132,6 +168,46 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
         }
         commitTextIfNeeded(composer.inputVowel(vowelIndex));
         refreshComposingText();
+    }
+
+    @Override
+    public void onGestureTrace(KeyboardSurfaceView.GestureTrace trace) {
+        if (!shouldCollectCalibrationTrace(trace)) {
+            return;
+        }
+        String target = SettingsStore.gestureCalibrationSessionTarget(this);
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection == null || target == null || target.isEmpty()) {
+            return;
+        }
+        CharSequence beforeCursor = inputConnection.getTextBeforeCursor(256, 0);
+        int index = beforeCursor == null ? 0 : beforeCursor.length();
+        if (index < 0 || index >= target.length()) {
+            return;
+        }
+        char expectedChar = target.charAt(index);
+        if (!GestureCalibration.isHangulSyllable(expectedChar)) {
+            return;
+        }
+        if (GestureCalibration.leadingIndex(expectedChar) != trace.key.consonant.leadingIndex()) {
+            return;
+        }
+        int expectedVowel = GestureCalibration.vowelIndex(expectedChar);
+        GestureCalibration.DirectionClass directionClass = GestureCalibration.classForVowel(expectedVowel);
+        if (directionClass == null) {
+            return;
+        }
+        SettingsStore.appendGestureCalibrationSample(this,
+                new GestureCalibration.Sample(trace.key.consonant, expectedVowel, directionClass, trace.motion));
+    }
+
+    private boolean shouldCollectCalibrationTrace(KeyboardSurfaceView.GestureTrace trace) {
+        return trace != null
+                && trace.key != null
+                && trace.key.type == KeySpec.Type.HANGUL_CONSONANT
+                && trace.key.consonant != null
+                && getPackageName().equals(currentEditorPackage)
+                && SettingsStore.isGestureCalibrationSessionActive(this);
     }
 
     private void switchMode(KeyboardMode nextMode) {
@@ -212,6 +288,53 @@ public class EightWayInputMethodService extends InputMethodService implements Ke
         }
         commitComposingText();
         commitText(text);
+    }
+
+    private void showClipboardContext() {
+        if (keyboardView == null) {
+            return;
+        }
+        keyboardView.showClipboardContext(currentEditorIsPassword ? "보안 입력란" : clipboardText());
+    }
+
+    private void pasteFromClipboard() {
+        commitComposingText();
+        InputConnection inputConnection = getCurrentInputConnection();
+        boolean handledByEditor = inputConnection != null
+                && inputConnection.performContextMenuAction(android.R.id.paste);
+        if (handledByEditor) {
+            return;
+        }
+        commitTextIfNeeded(clipboardText());
+    }
+
+    private String clipboardText() {
+        ClipboardManager clipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboardManager == null || !clipboardManager.hasPrimaryClip()) {
+            return "";
+        }
+        ClipData clipData = clipboardManager.getPrimaryClip();
+        if (clipData == null || clipData.getItemCount() == 0) {
+            return "";
+        }
+        CharSequence text = clipData.getItemAt(0).coerceToText(this);
+        return text == null ? "" : text.toString();
+    }
+
+    private boolean isPasswordInput(EditorInfo attribute) {
+        if (attribute == null) {
+            return false;
+        }
+        int inputType = attribute.inputType;
+        int inputClass = inputType & InputType.TYPE_MASK_CLASS;
+        int variation = inputType & InputType.TYPE_MASK_VARIATION;
+        if (inputClass == InputType.TYPE_CLASS_TEXT) {
+            return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    || variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD;
+        }
+        return inputClass == InputType.TYPE_CLASS_NUMBER
+                && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD;
     }
 
     private void playKeySound() {

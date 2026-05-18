@@ -12,6 +12,8 @@ public class KeySpec {
         MODE_ENGLISH,
         MODE_SYMBOLS,
         MODE_NUMBERS,
+        SYMBOL_PAGE_PREV,
+        SYMBOL_PAGE_NEXT,
         SHIFT,
         DELETE,
         SPACE,
@@ -20,6 +22,9 @@ public class KeySpec {
         SETTINGS,
         USEFUL_SENTENCE,
         MY_INFO,
+        CLIPBOARD_CONTEXT,
+        CLIPBOARD_PASTE,
+        CLIPBOARD_CLOSE,
         MOVE_LEFT,
         MOVE_RIGHT,
         NO_OP

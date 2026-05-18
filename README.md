@@ -22,6 +22,7 @@ Clean-room Android keyboard prototype based on the feature shape of the provided
   - supported compound gestures include ㅐ, ㅔ, ㅒ, ㅖ, ㅘ, ㅙ, ㅚ, ㅝ, ㅞ, ㅟ, ㅢ.
 - Hangul syllable composer with basic final consonant and compound final handling.
 - English, symbol, and number modes.
+- Clipboard context panel with paste support from the toolbar or by long-pressing Space.
 - Settings screen based on the analyzed APK feature set:
   - skin/theme selection
   - stroke length sensitivity
