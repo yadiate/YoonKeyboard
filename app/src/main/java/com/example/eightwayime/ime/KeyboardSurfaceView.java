@@ -245,6 +245,10 @@ public class KeyboardSurfaceView extends View {
         float gap = dp(4);
         float toolbarHeight = toolbarHeight();
         drawToolbar(canvas, toolbarHeight);
+        if (clipboardContextVisible) {
+            drawClipboardPanel(canvas, toolbarHeight);
+            return;
+        }
         float top = toolbarHeight + gap;
         float keyboardHeight = keyboardHeight();
         float rowAreaHeight = keyboardHeight - toolbarHeight;
@@ -283,10 +287,14 @@ public class KeyboardSurfaceView extends View {
                 gesturePoints.clear();
                 pressedKey = findToolbarKey(event.getX(), event.getY());
                 if (pressedKey == null) {
-                    pressedKey = findKey(event.getX(), event.getY());
-                    gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY(), event.getEventTime()));
-                    scheduleKeyPreviewIfNeeded(pressedKey);
-                    scheduleLongPressIfNeeded(pressedKey);
+                    if (clipboardContextVisible) {
+                        pressedKey = findClipboardKey(event.getX(), event.getY());
+                    } else {
+                        pressedKey = findKey(event.getX(), event.getY());
+                        gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY(), event.getEventTime()));
+                        scheduleKeyPreviewIfNeeded(pressedKey);
+                        scheduleLongPressIfNeeded(pressedKey);
+                    }
                 }
                 invalidate();
                 return true;
@@ -297,7 +305,7 @@ public class KeyboardSurfaceView extends View {
                     keyPreviewVisible = false;
                     invalidate();
                 }
-                if (pressedKey == null || !pressedKey.toolbar) {
+                if (pressedKey == null || (!pressedKey.toolbar && !pressedKey.clipboard)) {
                     gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY(), event.getEventTime()));
                 }
                 return true;
@@ -319,6 +327,11 @@ public class KeyboardSurfaceView extends View {
                     return true;
                 }
                 if (releasedKey.toolbar) {
+                    gesturePoints.clear();
+                    listener.onKey(releasedKey.key);
+                    return true;
+                }
+                if (releasedKey.clipboard) {
                     gesturePoints.clear();
                     listener.onKey(releasedKey.key);
                     return true;
@@ -737,6 +750,205 @@ public class KeyboardSurfaceView extends View {
         paint.setStyle(Paint.Style.FILL);
     }
 
+    private void drawClipboardPanel(Canvas canvas, float toolbarHeight) {
+        SettingsStore.KeyboardTheme theme = settings.theme;
+        float contentLeft = keyboardLeftInset();
+        float contentWidth = keyboardContentWidth();
+        RectF panel = new RectF(contentLeft + dp(10), toolbarHeight + dp(8),
+                contentLeft + contentWidth - dp(10), keyboardHeight() - dp(8));
+
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextAlign(Paint.Align.LEFT);
+        paint.setFakeBoldText(true);
+        paint.setTextSize(dp(19));
+        paint.setColor(theme.text);
+        drawBaselineText(canvas, "클립보드", panel.left, panel.top + dp(22));
+        paint.setFakeBoldText(false);
+
+        float closeWidth = dp(58);
+        clipboardCloseRect.set(panel.right - closeWidth, panel.top, panel.right, panel.top + dp(34));
+        paint.setTextAlign(Paint.Align.RIGHT);
+        paint.setTextSize(dp(14));
+        paint.setColor(theme.hint);
+        drawBaselineText(canvas, "닫기", clipboardCloseRect.right, clipboardCloseRect.centerY());
+
+        RectF grid = new RectF(panel.left, panel.top + dp(42), panel.right, panel.bottom);
+        layoutClipboardCards(grid);
+        if (clipboardClips.isEmpty()) {
+            drawEmptyClipboard(canvas, grid, theme);
+            return;
+        }
+        for (ClipboardCard card : clipboardCards) {
+            drawClipboardCard(canvas, card, theme);
+        }
+    }
+
+    private void drawEmptyClipboard(Canvas canvas, RectF grid, SettingsStore.KeyboardTheme theme) {
+        RectF emptyRect = new RectF(grid.left, grid.top, grid.right, Math.min(grid.bottom, grid.top + dp(96)));
+        drawRaisedKeyBackground(canvas, emptyRect, theme.keyNormal, false, dp(10));
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTextSize(dp(15));
+        paint.setColor(theme.hint);
+        String text = clipboardContextPreview == null || clipboardContextPreview.trim().isEmpty()
+                ? "클립보드가 비어 있습니다."
+                : clipboardContextPreview.trim();
+        drawCenteredText(canvas, text, emptyRect.centerX(), emptyRect.centerY());
+    }
+
+    private void drawClipboardCard(Canvas canvas, ClipboardCard card, SettingsStore.KeyboardTheme theme) {
+        boolean pressed = pressedKey != null && pressedKey.clipboard
+                && pressedKey.key.clipboardIndex == card.clip.index;
+        drawRaisedKeyBackground(canvas, card.rect, pressed ? theme.keyPressed : theme.keyNormal, pressed, dp(10));
+        RectF inner = new RectF(card.rect.left + dp(10), card.rect.top + dp(10),
+                card.rect.right - dp(10), card.rect.bottom - dp(10));
+
+        paint.setShader(null);
+        if (card.clip.thumbnail != null) {
+            float imageHeight = Math.min(inner.height() - dp(28), card.rect.width() * 0.62f);
+            RectF imageRect = new RectF(inner.left, inner.top, inner.right, inner.top + imageHeight);
+            Path clipPath = new Path();
+            clipPath.addRoundRect(imageRect, dp(8), dp(8), Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(clipPath);
+            canvas.drawBitmap(card.clip.thumbnail, null, imageRect, paint);
+            canvas.restore();
+            inner.top = imageRect.bottom + dp(8);
+        } else if (card.clip.image) {
+            RectF iconRect = new RectF(inner.left, inner.top, inner.right, inner.top + dp(54));
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(231, 236, 242));
+            canvas.drawRoundRect(iconRect, dp(8), dp(8), paint);
+            drawImagePlaceholder(canvas, iconRect, theme.hint);
+            inner.top = iconRect.bottom + dp(8);
+        }
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextAlign(Paint.Align.LEFT);
+        paint.setFakeBoldText(false);
+        paint.setTextSize(dp(12));
+        paint.setColor(theme.hint);
+        drawBaselineText(canvas, card.clip.typeLabel, inner.left, inner.top + dp(8));
+
+        paint.setTextSize(dp(card.clip.image ? 13 : 18));
+        paint.setColor(theme.text);
+        String text = card.clip.displayText == null || card.clip.displayText.trim().isEmpty()
+                ? (card.clip.image ? "이미지" : "텍스트")
+                : card.clip.displayText.trim().replaceAll("\\s+", " ");
+        RectF textRect = new RectF(inner.left, inner.top + dp(18), inner.right, inner.bottom);
+        drawWrappedText(canvas, text, textRect, card.clip.image ? 2 : 4);
+    }
+
+    private void drawImagePlaceholder(Canvas canvas, RectF rect, int color) {
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(1.8f, dp(1.8f)));
+        paint.setColor(color);
+        float left = rect.centerX() - dp(20);
+        float top = rect.centerY() - dp(14);
+        RectF imageBox = new RectF(left, top, left + dp(40), top + dp(28));
+        canvas.drawRoundRect(imageBox, dp(4), dp(4), paint);
+        canvas.drawCircle(imageBox.left + dp(10), imageBox.top + dp(9), dp(3), paint);
+        Path mountain = new Path();
+        mountain.moveTo(imageBox.left + dp(6), imageBox.bottom - dp(5));
+        mountain.lineTo(imageBox.left + dp(17), imageBox.bottom - dp(15));
+        mountain.lineTo(imageBox.left + dp(27), imageBox.bottom - dp(7));
+        mountain.lineTo(imageBox.right - dp(5), imageBox.bottom - dp(18));
+        canvas.drawPath(mountain, paint);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawWrappedText(Canvas canvas, String text, RectF rect, int maxLines) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        float lineHeight = (metrics.descent - metrics.ascent) * 1.15f;
+        String remaining = text;
+        float y = rect.top - metrics.ascent;
+        int lines = 0;
+        while (!remaining.isEmpty() && lines < maxLines && y <= rect.bottom) {
+            int count = paint.breakText(remaining, true, rect.width(), null);
+            if (count <= 0) {
+                break;
+            }
+            int breakAt = count;
+            if (count < remaining.length()) {
+                int space = remaining.lastIndexOf(' ', count);
+                if (space > 0) {
+                    breakAt = space;
+                }
+            }
+            String line = remaining.substring(0, breakAt).trim();
+            remaining = remaining.substring(Math.min(breakAt + 1, remaining.length())).trim();
+            if (lines == maxLines - 1 && !remaining.isEmpty()) {
+                while (paint.measureText(line + "…") > rect.width() && line.length() > 1) {
+                    line = line.substring(0, line.length() - 1);
+                }
+                line += "…";
+            }
+            canvas.drawText(line, rect.left, y, paint);
+            y += lineHeight;
+            lines++;
+        }
+    }
+
+    private void drawBaselineText(Canvas canvas, String text, float x, float centerY) {
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        float baseline = centerY - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText(text, x, baseline, paint);
+    }
+
+    private void layoutClipboardCards(RectF grid) {
+        clipboardCards.clear();
+        if (clipboardClips.isEmpty()) {
+            return;
+        }
+        float gap = dp(10);
+        int columns = clipboardClips.size() == 1 ? 1 : (grid.width() >= dp(420) ? 3 : 2);
+        float cardWidth = (grid.width() - gap * (columns - 1)) / columns;
+        float[] columnBottoms = new float[columns];
+        for (int i = 0; i < columns; i++) {
+            columnBottoms[i] = grid.top;
+        }
+        for (ClipboardClip clip : clipboardClips) {
+            int column = shortestColumn(columnBottoms);
+            float left = grid.left + column * (cardWidth + gap);
+            float top = columnBottoms[column];
+            float height = clipboardCardHeight(clip, cardWidth);
+            if (top + height > grid.bottom && !clipboardCards.isEmpty()) {
+                continue;
+            }
+            RectF rect = new RectF(left, top, left + cardWidth, Math.min(grid.bottom, top + height));
+            clipboardCards.add(new ClipboardCard(rect, clip));
+            columnBottoms[column] = rect.bottom + gap;
+        }
+    }
+
+    private int shortestColumn(float[] columnBottoms) {
+        int column = 0;
+        for (int i = 1; i < columnBottoms.length; i++) {
+            if (columnBottoms[i] < columnBottoms[column]) {
+                column = i;
+            }
+        }
+        return column;
+    }
+
+    private float clipboardCardHeight(ClipboardClip clip, float width) {
+        if (clip.thumbnail != null || clip.image) {
+            return Math.max(dp(112), width * 0.72f + dp(46));
+        }
+        int length = clip.displayText == null ? 0 : clip.displayText.trim().length();
+        if (length <= 18) {
+            return dp(82);
+        }
+        if (length <= 70) {
+            return dp(116);
+        }
+        return dp(152);
+    }
+
     private void drawSpacePadKey(Canvas canvas, RectF rect, SettingsStore.KeyboardTheme theme) {
         float symbolSize = Math.min(dp(24), rect.height() * 0.34f);
         float topY = rect.top + rect.height() * 0.27f;
@@ -793,6 +1005,23 @@ public class KeyboardSurfaceView extends View {
                 left += keyWidth + gap;
             }
             top += rowHeight + gap;
+        }
+        return null;
+    }
+
+    private KeyBounds findClipboardKey(float x, float y) {
+        if (clipboardCloseRect.contains(x, y)) {
+            return new KeyBounds(KeySpec.command("", KeySpec.Type.CLIPBOARD_CLOSE), new RectF(clipboardCloseRect),
+                    false, true);
+        }
+        RectF grid = new RectF(keyboardLeftInset() + dp(10), toolbarHeight() + dp(50),
+                keyboardLeftInset() + keyboardContentWidth() - dp(10), keyboardHeight() - dp(8));
+        layoutClipboardCards(grid);
+        for (ClipboardCard card : clipboardCards) {
+            if (card.rect.contains(x, y)) {
+                return new KeyBounds(KeySpec.clipboardPaste("", card.clip.index, 1f), new RectF(card.rect),
+                        false, true);
+            }
         }
         return null;
     }
@@ -944,7 +1173,6 @@ public class KeyboardSurfaceView extends View {
     private void buildRows() {
         rows.clear();
         if (clipboardContextVisible) {
-            buildClipboardContextRows();
             return;
         }
         switch (mode) {
@@ -961,31 +1189,6 @@ public class KeyboardSurfaceView extends View {
                 buildNumberRows();
                 break;
         }
-    }
-
-    private void buildClipboardContextRows() {
-        rows.add(row(KeySpec.command("클립보드", KeySpec.Type.NO_OP)));
-        rows.add(row(KeySpec.command(clipboardPreviewLabel(), KeySpec.Type.NO_OP)));
-        rows.add(row(
-                KeySpec.command("붙여넣기", KeySpec.Type.CLIPBOARD_PASTE, 2.2f),
-                KeySpec.command("닫기", KeySpec.Type.CLIPBOARD_CLOSE, 1.0f)));
-        rows.add(row(
-                KeySpec.command("문구", KeySpec.Type.USEFUL_SENTENCE),
-                KeySpec.command("내정보", KeySpec.Type.MY_INFO),
-                KeySpec.command("설정", KeySpec.Type.SETTINGS)));
-    }
-
-    private String clipboardPreviewLabel() {
-        String text = clipboardContextPreview == null ? "" : clipboardContextPreview.trim();
-        if (text.isEmpty()) {
-            return "비어 있음";
-        }
-        text = text.replaceAll("\\s+", " ");
-        int maxLength = 56;
-        if (text.length() > maxLength) {
-            return text.substring(0, maxLength - 1) + "…";
-        }
-        return text;
     }
 
     private void buildHangulRows() {
@@ -1373,15 +1576,47 @@ public class KeyboardSurfaceView extends View {
         final KeySpec key;
         final RectF rect;
         final boolean toolbar;
+        final boolean clipboard;
 
         KeyBounds(KeySpec key, RectF rect) {
-            this(key, rect, false);
+            this(key, rect, false, false);
         }
 
         KeyBounds(KeySpec key, RectF rect, boolean toolbar) {
+            this(key, rect, toolbar, false);
+        }
+
+        KeyBounds(KeySpec key, RectF rect, boolean toolbar, boolean clipboard) {
             this.key = key;
             this.rect = rect;
             this.toolbar = toolbar;
+            this.clipboard = clipboard;
+        }
+    }
+
+    public static class ClipboardClip {
+        public final int index;
+        public final String displayText;
+        public final String typeLabel;
+        public final Bitmap thumbnail;
+        public final boolean image;
+
+        public ClipboardClip(int index, String displayText, String typeLabel, Bitmap thumbnail, boolean image) {
+            this.index = index;
+            this.displayText = displayText == null ? "" : displayText;
+            this.typeLabel = typeLabel == null || typeLabel.trim().isEmpty() ? "클립" : typeLabel;
+            this.thumbnail = thumbnail;
+            this.image = image;
+        }
+    }
+
+    private static class ClipboardCard {
+        final RectF rect;
+        final ClipboardClip clip;
+
+        ClipboardCard(RectF rect, ClipboardClip clip) {
+            this.rect = rect;
+            this.clip = clip;
         }
     }
 }
