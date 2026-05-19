@@ -12,6 +12,8 @@ local.properties
 *.apk
 *.aab
 *.ap_
+.codex_apk_analysis/
+backups/
 
 # Signing material
 keystore.properties
