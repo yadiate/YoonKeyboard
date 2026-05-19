@@ -1,4 +1,4 @@
-package com.example.eightwayime.ime;
+package com.yadiate.yoonkeyboard.ime;
 
 import android.content.Context;
 import android.content.res.Configuration;
@@ -17,20 +17,33 @@ import android.view.View;
 import android.view.ViewParent;
 import android.view.WindowInsets;
 
-import com.example.eightwayime.SettingsStore;
-import com.example.eightwayime.hangul.Consonant;
-import com.example.eightwayime.hangul.GestureVowelMapper;
-import com.example.eightwayime.hangul.HangulComposer;
+import com.yadiate.yoonkeyboard.SettingsStore;
+import com.yadiate.yoonkeyboard.hangul.Consonant;
+import com.yadiate.yoonkeyboard.hangul.GestureCalibration;
+import com.yadiate.yoonkeyboard.hangul.GestureVowelMapper;
+import com.yadiate.yoonkeyboard.hangul.HangulComposer;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class KeyboardSurfaceView extends View {
     private static final float HANGUL_LEFT_KEY_WEIGHT = 1.1f;
     private static final float HANGUL_RIGHT_KEY_WEIGHT = 1.45f;
     private static final float SYMBOL_SIDE_KEY_WEIGHT = 1.05f;
     private static final float NUMBER_SIDE_KEY_WEIGHT = 1.05f;
+    private static final int DEFAULT_KEYBOARD_BODY_DP = 252;
+    private static final int TALL_KEYBOARD_BODY_DP = 310;
+    private static final int GESTURE_START_SLOP_DP = 10;
+    private static final int INVALID_POINTER_ID = -1;
+    private static final int DELETE_REPEAT_INITIAL_DELAY_MS = 180;
+    private static final int DELETE_REPEAT_INTERVAL_MS = 32;
+    private static final int KEY_HIT_SLOP_DP = 8;
+    private static final int LEFT_KEY_EXTRA_HIT_SLOP_DP = 5;
+    private static final float LEFT_KEY_HIT_SCORE_SCALE = 0.72f;
+    private static final float RIGHT_KEY_HIT_SCORE_SCALE = 1.08f;
     private static final String[] TOOLBAR_LABELS = {"☺", "GIF", "", "⚙", "", "⋮"};
     private static final float[] TOOLBAR_WEIGHTS = {1.1f, 1.35f, 1.1f, 1.1f, 0.22f, 1.0f};
     private static final String[][] SYMBOL_PAGES = {
@@ -49,6 +62,8 @@ public class KeyboardSurfaceView extends View {
     private final List<GestureVowelMapper.Point> gesturePoints = new ArrayList<>();
     private final List<ClipboardClip> clipboardClips = new ArrayList<>();
     private final List<ClipboardCard> clipboardCards = new ArrayList<>();
+    private final List<DeferredPointerTap> deferredPointerTaps = new ArrayList<>();
+    private final Set<Integer> ignoredPointerIds = new HashSet<>();
     private final GestureVowelMapper gestureMapper;
     private SettingsStore.Snapshot settings;
     private KeyboardActionListener listener;
@@ -63,9 +78,15 @@ public class KeyboardSurfaceView extends View {
     private final RectF clipboardCloseRect = new RectF();
     private KeyBounds pressedKey;
     private Runnable longPressRunnable;
+    private Runnable deleteRepeatRunnable;
     private Runnable keyPreviewRunnable;
     private boolean longPressFired;
     private boolean keyPreviewVisible;
+    private boolean gestureDragStarted;
+    private boolean gesturePreviewVisible;
+    private boolean gesturePreviewHapticPlayed;
+    private String gesturePreviewLabel = "";
+    private int activePointerId = INVALID_POINTER_ID;
     private float touchDownX;
     private float touchDownY;
 
@@ -214,6 +235,11 @@ public class KeyboardSurfaceView extends View {
         return shift;
     }
 
+    public RectF currentConsonantKeyRect(Consonant consonant) {
+        KeyBounds keyBounds = findConsonantKey(consonant);
+        return keyBounds == null ? null : new RectF(keyBounds.rect);
+    }
+
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -225,8 +251,11 @@ public class KeyboardSurfaceView extends View {
         int width = MeasureSpec.getSize(widthMeasureSpec);
         int rowCount = Math.max(4, rows.size());
         float heightScale = settings == null ? 1f : settings.keyboardHeightScale();
+        int bodyHeightDp = mode != KeyboardMode.SYMBOLS && rowCount >= 5
+                ? TALL_KEYBOARD_BODY_DP
+                : DEFAULT_KEYBOARD_BODY_DP;
         int desiredHeight = toolbarHeight()
-                + Math.round(dp(rowCount >= 5 ? 310 : (mode == KeyboardMode.SYMBOLS ? 268 : 252)) * heightScale)
+                + Math.round(dp(bodyHeightDp) * heightScale)
                 + bottomSafeInset();
         int height = resolveSize(desiredHeight, heightMeasureSpec);
         setMeasuredDimension(width, height);
@@ -277,94 +306,404 @@ public class KeyboardSurfaceView extends View {
     public boolean onTouchEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                requestParentTouchIntercept(false);
-                cancelScheduledLongPress();
-                cancelScheduledKeyPreview();
-                longPressFired = false;
-                keyPreviewVisible = false;
-                touchDownX = event.getX();
-                touchDownY = event.getY();
-                gesturePoints.clear();
-                pressedKey = findToolbarKey(event.getX(), event.getY());
-                if (pressedKey == null) {
-                    if (clipboardContextVisible) {
-                        pressedKey = findClipboardKey(event.getX(), event.getY());
-                    } else {
-                        pressedKey = findKey(event.getX(), event.getY());
-                        gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY(), event.getEventTime()));
-                        scheduleKeyPreviewIfNeeded(pressedKey);
-                        scheduleLongPressIfNeeded(pressedKey);
-                    }
+                ignoredPointerIds.clear();
+                deferredPointerTaps.clear();
+                activePointerId = event.getPointerId(event.getActionIndex());
+                beginKeyTouch(event.getX(event.getActionIndex()), event.getY(event.getActionIndex()),
+                        event.getEventTime());
+                return true;
+            case MotionEvent.ACTION_POINTER_DOWN:
+                int newPointerIndex = event.getActionIndex();
+                int newPointerId = event.getPointerId(newPointerIndex);
+                if (shouldTransferSpaceTouchTo(event.getX(newPointerIndex), event.getY(newPointerIndex))) {
+                    ignoreActivePointer();
+                    commitPressedKeyAsTap();
+                    activePointerId = newPointerId;
+                    beginKeyTouch(event.getX(newPointerIndex), event.getY(newPointerIndex), event.getEventTime());
+                } else if (shouldFocusPointer(event.getX(newPointerIndex), event.getY(newPointerIndex))) {
+                    ignoreActivePointer();
+                    cancelKeyTouch();
+                    activePointerId = newPointerId;
+                    beginKeyTouch(event.getX(newPointerIndex), event.getY(newPointerIndex), event.getEventTime());
+                } else {
+                    deferPointerTapIfNeeded(newPointerId,
+                            event.getX(newPointerIndex), event.getY(newPointerIndex));
                 }
-                invalidate();
                 return true;
             case MotionEvent.ACTION_MOVE:
-                if (movedBeyondLongPressSlop(event.getX(), event.getY())) {
+                int movePointerIndex = activePointerIndex(event);
+                if (movePointerIndex < 0) {
+                    return true;
+                }
+                float moveX = event.getX(movePointerIndex);
+                float moveY = event.getY(movePointerIndex);
+                if (pressedKey == null && actionableKeyAt(moveX, moveY) != null) {
+                    beginKeyTouch(moveX, moveY, event.getEventTime());
+                    return true;
+                }
+                boolean dragStarted = movedBeyondGestureStartSlop(moveX, moveY);
+                if (dragStarted) {
+                    gestureDragStarted = true;
                     cancelScheduledLongPress();
                     cancelScheduledKeyPreview();
                     keyPreviewVisible = false;
+                    if (!gesturePreviewVisible) {
+                        showInitialGesturePreviewIfNeeded(pressedKey);
+                    }
                     invalidate();
                 }
                 if (pressedKey == null || (!pressedKey.toolbar && !pressedKey.clipboard)) {
-                    gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY(), event.getEventTime()));
+                    gesturePoints.add(new GestureVowelMapper.Point(moveX, moveY, event.getEventTime()));
+                }
+                if (gesturePreviewVisible && pressedKey != null && !pressedKey.toolbar && !pressedKey.clipboard) {
+                    updateGesturePreview(pressedKey);
+                }
+                return true;
+            case MotionEvent.ACTION_POINTER_UP:
+                int pointerUpIndex = event.getActionIndex();
+                int pointerUpId = event.getPointerId(pointerUpIndex);
+                if (pointerUpId == activePointerId) {
+                    finishKeyTouch(event.getX(pointerUpIndex), event.getY(pointerUpIndex), event.getEventTime());
+                    activePointerId = INVALID_POINTER_ID;
+                    ignoredPointerIds.remove(pointerUpId);
+                    if (!promoteRemainingPointer(event, pointerUpIndex)) {
+                        flushReleasedDeferredPointerTaps();
+                    }
+                } else {
+                    ignoredPointerIds.remove(pointerUpId);
+                    markDeferredPointerReleased(pointerUpId);
                 }
                 return true;
             case MotionEvent.ACTION_UP:
-                requestParentTouchIntercept(true);
-                cancelScheduledLongPress();
-                cancelScheduledKeyPreview();
-                KeyBounds releasedKey = pressedKey;
-                pressedKey = null;
-                keyPreviewVisible = false;
-                invalidate();
-                if (longPressFired) {
-                    longPressFired = false;
-                    gesturePoints.clear();
-                    return true;
+                int upPointerIndex = activePointerIndex(event);
+                if (upPointerIndex < 0) {
+                    upPointerIndex = event.getActionIndex();
                 }
-                if (releasedKey == null || listener == null) {
-                    gesturePoints.clear();
-                    return true;
-                }
-                if (releasedKey.toolbar) {
-                    gesturePoints.clear();
-                    listener.onKey(releasedKey.key);
-                    return true;
-                }
-                if (releasedKey.clipboard) {
-                    gesturePoints.clear();
-                    listener.onKey(releasedKey.key);
-                    return true;
-                }
-                gesturePoints.add(new GestureVowelMapper.Point(event.getX(), event.getY(), event.getEventTime()));
-                String spaceSymbol = spaceSymbolForGesture(releasedKey);
-                Integer vowel = spaceSymbol == null ? gestureMapper.map(gesturePoints, releasedKey.key.consonant) : null;
-                List<GestureVowelMapper.Point> tracedPoints = new ArrayList<>(gesturePoints);
-                if (spaceSymbol != null) {
-                    gesturePoints.clear();
-                    listener.onKey(KeySpec.character(spaceSymbol, spaceSymbol));
-                } else if (shouldHandleGesture(releasedKey.key, vowel)) {
-                    notifyGestureTrace(releasedKey, vowel, tracedPoints);
-                    gesturePoints.clear();
-                    listener.onGesture(releasedKey.key, vowel);
-                } else {
-                    gesturePoints.clear();
-                    listener.onKey(releasedKey.key);
-                }
+                finishKeyTouch(event.getX(upPointerIndex), event.getY(upPointerIndex), event.getEventTime());
+                activePointerId = INVALID_POINTER_ID;
+                ignoredPointerIds.clear();
+                flushReleasedDeferredPointerTaps();
+                deferredPointerTaps.clear();
                 return true;
             case MotionEvent.ACTION_CANCEL:
-                requestParentTouchIntercept(true);
-                cancelScheduledLongPress();
-                cancelScheduledKeyPreview();
-                longPressFired = false;
-                keyPreviewVisible = false;
-                pressedKey = null;
-                gesturePoints.clear();
-                invalidate();
+                activePointerId = INVALID_POINTER_ID;
+                ignoredPointerIds.clear();
+                deferredPointerTaps.clear();
+                cancelKeyTouch();
                 return true;
             default:
                 return super.onTouchEvent(event);
         }
+    }
+
+    private void beginKeyTouch(float x, float y, long eventTime) {
+        requestParentTouchIntercept(false);
+        cancelScheduledLongPress();
+        cancelScheduledKeyPreview();
+        longPressFired = false;
+        keyPreviewVisible = false;
+        gestureDragStarted = false;
+        clearGesturePreview();
+        touchDownX = x;
+        touchDownY = y;
+        gesturePoints.clear();
+        pressedKey = findToolbarKey(x, y);
+        if (!isActionableKey(pressedKey)) {
+            pressedKey = null;
+        }
+        if (pressedKey == null) {
+            if (clipboardContextVisible) {
+                pressedKey = findClipboardKey(x, y);
+                if (!isActionableKey(pressedKey)) {
+                    pressedKey = null;
+                }
+            } else {
+                pressedKey = findKey(x, y);
+                if (!isActionableKey(pressedKey)) {
+                    pressedKey = null;
+                }
+                if (pressedKey != null) {
+                    gesturePoints.add(new GestureVowelMapper.Point(x, y, eventTime));
+                    scheduleKeyPreviewIfNeeded(pressedKey);
+                    scheduleLongPressIfNeeded(pressedKey);
+                }
+            }
+        }
+        invalidate();
+    }
+
+    private void finishKeyTouch(float x, float y, long eventTime) {
+        requestParentTouchIntercept(true);
+        cancelScheduledLongPress();
+        cancelScheduledKeyPreview();
+        KeyBounds releasedKey = pressedKey;
+        if (longPressFired) {
+            longPressFired = false;
+            pressedKey = null;
+            keyPreviewVisible = false;
+            gestureDragStarted = false;
+            clearGesturePreview();
+            invalidate();
+            gesturePoints.clear();
+            return;
+        }
+        if (releasedKey == null || listener == null) {
+            pressedKey = null;
+            keyPreviewVisible = false;
+            gestureDragStarted = false;
+            clearGesturePreview();
+            invalidate();
+            gesturePoints.clear();
+            return;
+        }
+        if (releasedKey.toolbar) {
+            pressedKey = null;
+            keyPreviewVisible = false;
+            gestureDragStarted = false;
+            clearGesturePreview();
+            invalidate();
+            gesturePoints.clear();
+            listener.onKey(releasedKey.key);
+            return;
+        }
+        if (releasedKey.clipboard) {
+            pressedKey = null;
+            keyPreviewVisible = false;
+            gestureDragStarted = false;
+            clearGesturePreview();
+            invalidate();
+            gesturePoints.clear();
+            listener.onKey(releasedKey.key);
+            return;
+        }
+        gesturePoints.add(new GestureVowelMapper.Point(x, y, eventTime));
+        boolean gestureCandidate = gestureDragStarted
+                || movedBeyondGestureStartSlop(x, y);
+        String spaceSymbol = gestureCandidate ? spaceSymbolForGesture(releasedKey) : null;
+        Integer vowel = gestureCandidate && spaceSymbol == null
+                ? gestureMapper.map(gesturePoints, releasedKey.key.consonant)
+                : null;
+        List<GestureVowelMapper.Point> tracedPoints = new ArrayList<>(gesturePoints);
+        notifyConsonantTouch(releasedKey);
+        boolean playCommitHaptic = !gesturePreviewHapticPlayed;
+        if (spaceSymbol == null && shouldHandleGesture(releasedKey.key, vowel)) {
+            boolean finalPreviewChanged = updateGesturePreview(releasedKey, vowel);
+            playCommitHaptic = playCommitHaptic && !finalPreviewChanged;
+        }
+        pressedKey = null;
+        keyPreviewVisible = false;
+        gestureDragStarted = false;
+        clearGesturePreview();
+        invalidate();
+        if (spaceSymbol != null) {
+            gesturePoints.clear();
+            listener.onKey(KeySpec.character(spaceSymbol, spaceSymbol));
+        } else if (shouldHandleGesture(releasedKey.key, vowel)) {
+            notifyGestureTrace(releasedKey, vowel, tracedPoints);
+            gesturePoints.clear();
+            listener.onGesture(releasedKey.key, vowel, playCommitHaptic);
+        } else {
+            gesturePoints.clear();
+            listener.onKey(releasedKey.key);
+        }
+    }
+
+    private void cancelKeyTouch() {
+        requestParentTouchIntercept(true);
+        cancelScheduledLongPress();
+        cancelScheduledKeyPreview();
+        longPressFired = false;
+        keyPreviewVisible = false;
+        gestureDragStarted = false;
+        clearGesturePreview();
+        pressedKey = null;
+        gesturePoints.clear();
+        invalidate();
+    }
+
+    private void commitPressedKeyAsTap() {
+        KeyBounds keyBounds = pressedKey;
+        if (keyBounds == null || listener == null) {
+            cancelKeyTouch();
+            return;
+        }
+        cancelScheduledLongPress();
+        cancelScheduledKeyPreview();
+        longPressFired = false;
+        keyPreviewVisible = false;
+        gestureDragStarted = false;
+        clearGesturePreview();
+        pressedKey = null;
+        gesturePoints.clear();
+        invalidate();
+        listener.onKey(keyBounds.key);
+    }
+
+    private void ignoreActivePointer() {
+        if (activePointerId != INVALID_POINTER_ID) {
+            ignoredPointerIds.add(activePointerId);
+        }
+    }
+
+    private boolean shouldFocusPointer(float x, float y) {
+        return listener != null
+                && pressedKey == null
+                && actionableKeyAt(x, y) != null;
+    }
+
+    private boolean promoteRemainingPointer(MotionEvent event, int excludedPointerIndex) {
+        int nextPointerIndex = promotablePointerIndex(event, excludedPointerIndex);
+        if (nextPointerIndex < 0) {
+            return false;
+        }
+        activePointerId = event.getPointerId(nextPointerIndex);
+        removeDeferredPointerTap(activePointerId);
+        beginKeyTouch(event.getX(nextPointerIndex), event.getY(nextPointerIndex), event.getEventTime());
+        return true;
+    }
+
+    private int promotablePointerIndex(MotionEvent event, int excludedPointerIndex) {
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            if (i == excludedPointerIndex) {
+                continue;
+            }
+            int pointerId = event.getPointerId(i);
+            if (ignoredPointerIds.contains(pointerId)) {
+                continue;
+            }
+            if (actionableKeyAt(event.getX(i), event.getY(i)) != null) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void deferPointerTapIfNeeded(int pointerId, float x, float y) {
+        if (pointerId == activePointerId || ignoredPointerIds.contains(pointerId)) {
+            return;
+        }
+        KeyBounds keyBounds = actionableKeyAt(x, y);
+        if (!canDeferPointerTap(keyBounds)) {
+            return;
+        }
+        removeDeferredPointerTap(pointerId);
+        deferredPointerTaps.add(new DeferredPointerTap(pointerId, keyBounds));
+    }
+
+    private boolean canDeferPointerTap(KeyBounds keyBounds) {
+        if (keyBounds == null || keyBounds.toolbar || keyBounds.clipboard) {
+            return false;
+        }
+        switch (keyBounds.key.type) {
+            case HANGUL_CONSONANT:
+            case HANGUL_VOWEL:
+            case CHARACTER:
+            case DELETE:
+            case SPACE:
+            case ENTER:
+            case MOVE_LEFT:
+            case MOVE_RIGHT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void markDeferredPointerReleased(int pointerId) {
+        DeferredPointerTap tap = deferredPointerTap(pointerId);
+        if (tap == null) {
+            return;
+        }
+        tap.released = true;
+        if (activePointerId == INVALID_POINTER_ID || pressedKey == null) {
+            flushReleasedDeferredPointerTaps();
+        }
+    }
+
+    private void flushReleasedDeferredPointerTaps() {
+        if (listener == null || deferredPointerTaps.isEmpty()) {
+            return;
+        }
+        List<DeferredPointerTap> taps = new ArrayList<>(deferredPointerTaps);
+        deferredPointerTaps.clear();
+        for (DeferredPointerTap tap : taps) {
+            if (tap.released) {
+                listener.onKey(tap.keyBounds.key);
+            } else {
+                deferredPointerTaps.add(tap);
+            }
+        }
+    }
+
+    private DeferredPointerTap deferredPointerTap(int pointerId) {
+        for (DeferredPointerTap tap : deferredPointerTaps) {
+            if (tap.pointerId == pointerId) {
+                return tap;
+            }
+        }
+        return null;
+    }
+
+    private void removeDeferredPointerTap(int pointerId) {
+        for (int i = deferredPointerTaps.size() - 1; i >= 0; i--) {
+            if (deferredPointerTaps.get(i).pointerId == pointerId) {
+                deferredPointerTaps.remove(i);
+            }
+        }
+    }
+
+    private boolean shouldTransferSpaceTouchTo(float x, float y) {
+        if (pressedKey == null
+                || listener == null
+                || longPressFired
+                || gestureDragStarted
+                || pressedKey.toolbar
+                || pressedKey.clipboard
+                || pressedKey.key.type != KeySpec.Type.SPACE) {
+            return false;
+        }
+        KeyBounds nextKey = actionableKeyAt(x, y);
+        return nextKey != null
+                && !nextKey.toolbar
+                && !nextKey.clipboard
+                && nextKey.key.type != KeySpec.Type.SPACE;
+    }
+
+    private KeyBounds actionableKeyAt(float x, float y) {
+        KeyBounds keyBounds = findToolbarKey(x, y);
+        if (keyBounds == null) {
+            keyBounds = clipboardContextVisible ? findClipboardKey(x, y) : findKey(x, y);
+        }
+        return isActionableKey(keyBounds) ? keyBounds : null;
+    }
+
+    private int hitPriority(KeySpec key) {
+        switch (key.type) {
+            case HANGUL_CONSONANT:
+            case HANGUL_VOWEL:
+            case CHARACTER:
+                return 0;
+            case HANGUL_VOWEL_PAD:
+            case SPACE:
+            case ENTER:
+            case DELETE:
+                return 1;
+            default:
+                return 2;
+        }
+    }
+
+    private boolean isActionableKey(KeyBounds keyBounds) {
+        return keyBounds != null
+                && keyBounds.key != null
+                && keyBounds.key.type != KeySpec.Type.NO_OP;
+    }
+
+    private int activePointerIndex(MotionEvent event) {
+        if (activePointerId == INVALID_POINTER_ID) {
+            return -1;
+        }
+        return event.findPointerIndex(activePointerId);
     }
 
     private boolean shouldHandleGesture(KeySpec key, Integer vowel) {
@@ -385,6 +724,88 @@ public class KeyboardSurfaceView extends View {
         }
         gestureTraceListener.onGestureTrace(new GestureTrace(keyBounds.key, new RectF(keyBounds.rect),
                 vowel, gestureMapper.trace(points)));
+    }
+
+    private void notifyConsonantTouch(KeyBounds keyBounds) {
+        if (gestureTraceListener == null
+                || keyBounds == null
+                || keyBounds.key == null
+                || keyBounds.key.type != KeySpec.Type.HANGUL_CONSONANT
+                || keyBounds.key.consonant == null) {
+            return;
+        }
+        gestureTraceListener.onConsonantTouch(new ConsonantTouch(keyBounds.key.consonant,
+                new RectF(keyBounds.rect), touchDownX, touchDownY));
+    }
+
+    private void showInitialGesturePreviewIfNeeded(KeyBounds keyBounds) {
+        if (!canShowGesturePreview(keyBounds)) {
+            return;
+        }
+        String label = gesturePreviewLabelFor(keyBounds.key, null);
+        if (label.isEmpty()) {
+            return;
+        }
+        gesturePreviewLabel = label;
+        gesturePreviewVisible = true;
+    }
+
+    private boolean updateGesturePreview(KeyBounds keyBounds) {
+        Integer vowel = gestureMapper.map(gesturePoints, keyBounds.key.consonant);
+        return updateGesturePreview(keyBounds, vowel);
+    }
+
+    private boolean updateGesturePreview(KeyBounds keyBounds, Integer vowel) {
+        if (!canShowGesturePreview(keyBounds)) {
+            return false;
+        }
+        String nextLabel = gesturePreviewLabelFor(keyBounds.key, vowel);
+        if (nextLabel.isEmpty()) {
+            return false;
+        }
+        if (!gesturePreviewVisible) {
+            gesturePreviewLabel = nextLabel;
+            gesturePreviewVisible = true;
+            invalidate();
+            return false;
+        }
+        if (nextLabel.equals(gesturePreviewLabel)) {
+            return false;
+        }
+        gesturePreviewLabel = nextLabel;
+        gesturePreviewHapticPlayed = true;
+        if (listener != null) {
+            listener.onGesturePreviewChanged(nextLabel);
+        }
+        invalidate();
+        return true;
+    }
+
+    private boolean canShowGesturePreview(KeyBounds keyBounds) {
+        return keyBounds != null
+                && !keyBounds.toolbar
+                && !keyBounds.clipboard
+                && mode == KeyboardMode.HANGUL
+                && canStartVowelGesture(keyBounds.key);
+    }
+
+    private String gesturePreviewLabelFor(KeySpec key, Integer vowel) {
+        if (key.type == KeySpec.Type.HANGUL_CONSONANT) {
+            if (vowel != null) {
+                return HangulComposer.previewSyllable(key.consonant, vowel);
+            }
+            return key.consonant == null ? "" : key.consonant.label();
+        }
+        if (key.type == KeySpec.Type.HANGUL_VOWEL || key.type == KeySpec.Type.HANGUL_VOWEL_PAD) {
+            return vowel == null ? primaryKeyLabel(key) : HangulComposer.compatVowel(vowel);
+        }
+        return "";
+    }
+
+    private void clearGesturePreview() {
+        gesturePreviewVisible = false;
+        gesturePreviewHapticPlayed = false;
+        gesturePreviewLabel = "";
     }
 
     private void requestParentTouchIntercept(boolean allowIntercept) {
@@ -419,17 +840,28 @@ public class KeyboardSurfaceView extends View {
             if (pressedKey == null || pressedKey.key != key || listener == null) {
                 return;
             }
+            if (key.type == KeySpec.Type.DELETE) {
+                startDeleteRepeat(key);
+                return;
+            }
             longPressFired = true;
             gesturePoints.clear();
             longPressRunnable = null;
             listener.onKey(longPressKeyFor(key));
             invalidate();
         };
-        postDelayed(longPressRunnable, settings.longPressTimeoutMs());
+        postDelayed(longPressRunnable, longPressDelayMs(key));
     }
 
     private boolean canLongPress(KeySpec key) {
-        return canLongPressTopHint(key) || canLongPressClipboardContext(key);
+        return key.type == KeySpec.Type.DELETE || canLongPressTopHint(key) || canLongPressClipboardContext(key);
+    }
+
+    private int longPressDelayMs(KeySpec key) {
+        if (key.type == KeySpec.Type.DELETE) {
+            return DELETE_REPEAT_INITIAL_DELAY_MS;
+        }
+        return settings.longPressTimeoutMs();
     }
 
     private boolean canLongPressTopHint(KeySpec key) {
@@ -455,10 +887,34 @@ public class KeyboardSurfaceView extends View {
         return KeySpec.character(key.hintTop, key.hintTop);
     }
 
+    private void startDeleteRepeat(KeySpec key) {
+        longPressFired = true;
+        gesturePoints.clear();
+        longPressRunnable = null;
+        listener.onKey(key);
+        deleteRepeatRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (pressedKey == null || pressedKey.key != key || listener == null) {
+                    deleteRepeatRunnable = null;
+                    return;
+                }
+                listener.onKey(key);
+                postDelayed(this, DELETE_REPEAT_INTERVAL_MS);
+            }
+        };
+        postDelayed(deleteRepeatRunnable, DELETE_REPEAT_INTERVAL_MS);
+        invalidate();
+    }
+
     private void cancelScheduledLongPress() {
         if (longPressRunnable != null) {
             removeCallbacks(longPressRunnable);
             longPressRunnable = null;
+        }
+        if (deleteRepeatRunnable != null) {
+            removeCallbacks(deleteRepeatRunnable);
+            deleteRepeatRunnable = null;
         }
     }
 
@@ -469,18 +925,22 @@ public class KeyboardSurfaceView extends View {
         }
     }
 
-    private boolean movedBeyondLongPressSlop(float x, float y) {
+    private boolean movedBeyondGestureStartSlop(float x, float y) {
         float dx = x - touchDownX;
         float dy = y - touchDownY;
-        return Math.hypot(dx, dy) > dp(10);
+        return Math.hypot(dx, dy) > dp(GESTURE_START_SLOP_DP);
     }
 
     private void drawKeyPreview(Canvas canvas) {
-        if (!keyPreviewVisible || pressedKey == null || pressedKey.toolbar || !canShowKeyPreview(pressedKey.key)) {
+        if (pressedKey == null || pressedKey.toolbar || pressedKey.clipboard) {
             return;
         }
-        boolean auxiliaryPreview = hasAuxiliaryPreview(pressedKey.key);
-        String label = previewLabel(pressedKey.key);
+        boolean gesturePreview = gesturePreviewVisible && !gesturePreviewLabel.isEmpty();
+        if (!gesturePreview && (!keyPreviewVisible || !canShowKeyPreview(pressedKey.key))) {
+            return;
+        }
+        boolean auxiliaryPreview = !gesturePreview && hasAuxiliaryPreview(pressedKey.key);
+        String label = gesturePreview ? gesturePreviewLabel : previewLabel(pressedKey.key);
         if (label.isEmpty()) {
             return;
         }
@@ -652,12 +1112,12 @@ public class KeyboardSurfaceView extends View {
         }
 
         String[] labelLines = key.label.split("\\n", -1);
-        paint.setTextSize(dp(isCompactLabel(key.label) ? 12 : 24));
+        paint.setTextSize(dp(labelTextSizeDp(key)));
         Paint.FontMetrics metrics = paint.getFontMetrics();
         float lineHeight = metrics.descent - metrics.ascent;
         float centerY = rect.centerY();
         if (key.hintTop != null && !key.hintTop.isEmpty()) {
-            centerY += dp(5);
+            centerY += dp(1);
         }
         float firstBaseline = centerY - lineHeight * (labelLines.length - 1) / 2f
                 - (metrics.ascent + metrics.descent) / 2f;
@@ -672,6 +1132,13 @@ public class KeyboardSurfaceView extends View {
             return true;
         }
         return label.length() > 2;
+    }
+
+    private int labelTextSizeDp(KeySpec key) {
+        if (isCompactLabel(key.label)) {
+            return 12;
+        }
+        return key.type == KeySpec.Type.HANGUL_CONSONANT ? 22 : 24;
     }
 
     private void drawToolbar(Canvas canvas, float toolbarHeight) {
@@ -987,6 +1454,9 @@ public class KeyboardSurfaceView extends View {
         float keyboardHeight = keyboardHeight();
         float rowAreaHeight = keyboardHeight - toolbarHeight();
         float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
+        KeyBounds bestKey = null;
+        float bestScore = Float.MAX_VALUE;
+        int bestPriority = Integer.MAX_VALUE;
         for (RowLayout row : rows) {
             float totalWeight = row.totalWeight();
             float contentLeft = keyboardLeftInset();
@@ -997,8 +1467,47 @@ public class KeyboardSurfaceView extends View {
                 float keyWidth = availableWidth * (key.weight / totalWeight);
                 RectF rect = new RectF(left, top, left + keyWidth, top + rowHeight);
                 RectF touchRect = spanRect(row, i, rect, rowHeight, gap, availableWidth, totalWeight);
-                if (touchRect.contains(x, y)) {
-                    return new KeyBounds(key, touchRect);
+                if (key.type != KeySpec.Type.NO_OP) {
+                    RectF hitRect = expandedKeyHitRect(touchRect, gap, key);
+                    if (hitRect.contains(x, y)) {
+                        float score = adjustedHitScore(x, y, touchRect, key);
+                        int priority = hitPriority(key);
+                        if (score < bestScore
+                                || (Math.abs(score - bestScore) <= dp(3) * dp(3)
+                                && priority < bestPriority)) {
+                            bestScore = score;
+                            bestPriority = priority;
+                            bestKey = new KeyBounds(key, touchRect);
+                        }
+                    }
+                }
+                left += keyWidth + gap;
+            }
+            top += rowHeight + gap;
+        }
+        return bestKey;
+    }
+
+    private KeyBounds findConsonantKey(Consonant consonant) {
+        if (consonant == null) {
+            return null;
+        }
+        float gap = dp(4);
+        float top = toolbarHeight() + gap;
+        float keyboardHeight = keyboardHeight();
+        float rowAreaHeight = keyboardHeight - toolbarHeight();
+        float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
+        for (RowLayout row : rows) {
+            float totalWeight = row.totalWeight();
+            float contentLeft = keyboardLeftInset();
+            float left = contentLeft + gap;
+            float availableWidth = keyboardContentWidth() - gap * (row.keys.size() + 1);
+            for (int i = 0; i < row.keys.size(); i++) {
+                KeySpec key = row.keys.get(i);
+                float keyWidth = availableWidth * (key.weight / totalWeight);
+                RectF rect = new RectF(left, top, left + keyWidth, top + rowHeight);
+                if (key.type == KeySpec.Type.HANGUL_CONSONANT && key.consonant == consonant) {
+                    return new KeyBounds(key, spanRect(row, i, rect, rowHeight, gap, availableWidth, totalWeight));
                 }
                 left += keyWidth + gap;
             }
@@ -1126,6 +1635,107 @@ public class KeyboardSurfaceView extends View {
         }
         float bottom = rect.bottom + (key.rowSpan - 1) * (rowHeight + gap);
         return new RectF(rect.left, rect.top, right, Math.min(bottom, keyboardBottom(gap)));
+    }
+
+    private RectF expandedKeyHitRect(RectF rect, float gap, KeySpec key) {
+        float slop = Math.max(gap / 2f, dp(KEY_HIT_SLOP_DP));
+        if (isLeftTextKey(rect, key)) {
+            slop += dp(LEFT_KEY_EXTRA_HIT_SLOP_DP);
+        }
+        float contentLeft = keyboardLeftInset();
+        float contentRight = contentLeft + keyboardContentWidth();
+        float keyboardTop = toolbarHeight();
+        float keyboardBottom = keyboardHeight();
+        RectF hitRect = new RectF(
+                Math.max(contentLeft, rect.left - slop),
+                Math.max(keyboardTop, rect.top - slop),
+                Math.min(contentRight, rect.right + slop),
+                Math.min(keyboardBottom, rect.bottom + slop));
+        GestureCalibration.TouchProfile touchProfile = consonantTouchProfile(key);
+        if (touchProfile != null) {
+            float offsetX = touchProfile.centerOffsetXRatio * rect.width();
+            float offsetY = touchProfile.centerOffsetYRatio * rect.height();
+            float extraX = Math.max(dp(3), rect.width() * touchProfile.extraSlopRatio);
+            float extraY = Math.max(dp(3), rect.height() * touchProfile.extraSlopRatio);
+            hitRect.union(new RectF(
+                    Math.max(contentLeft, rect.left + offsetX - extraX),
+                    Math.max(keyboardTop, rect.top + offsetY - extraY),
+                    Math.min(contentRight, rect.right + offsetX + extraX),
+                    Math.min(keyboardBottom, rect.bottom + offsetY + extraY)));
+        }
+        return hitRect;
+    }
+
+    private float adjustedHitScore(float x, float y, RectF rect, KeySpec key) {
+        float score = isTextInputKey(key)
+                ? calibratedCenterScore(x, y, rect, key)
+                : distanceToRectScore(x, y, rect);
+        if (isLeftTextKey(rect, key)) {
+            return score * LEFT_KEY_HIT_SCORE_SCALE;
+        }
+        if (isRightTextKey(rect, key)) {
+            return score * RIGHT_KEY_HIT_SCORE_SCALE;
+        }
+        return score;
+    }
+
+    private float calibratedCenterScore(float x, float y, RectF rect, KeySpec key) {
+        GestureCalibration.TouchProfile touchProfile = consonantTouchProfile(key);
+        float centerX = rect.centerX();
+        float centerY = rect.centerY();
+        if (touchProfile != null) {
+            centerX += touchProfile.centerOffsetXRatio * rect.width();
+            centerY += touchProfile.centerOffsetYRatio * rect.height();
+        }
+        float dx = x - centerX;
+        float dy = (y - centerY) * 1.08f;
+        return dx * dx + dy * dy;
+    }
+
+    private GestureCalibration.TouchProfile consonantTouchProfile(KeySpec key) {
+        if (settings == null
+                || !settings.gestureCalibrationEnabled
+                || settings.gestureCalibrationProfile == null
+                || key == null
+                || key.type != KeySpec.Type.HANGUL_CONSONANT
+                || key.consonant == null) {
+            return null;
+        }
+        return settings.gestureCalibrationProfile.touchProfile(key.consonant);
+    }
+
+    private float distanceToRectScore(float x, float y, RectF rect) {
+        float dx = 0f;
+        if (x < rect.left) {
+            dx = rect.left - x;
+        } else if (x > rect.right) {
+            dx = x - rect.right;
+        }
+        float dy = 0f;
+        if (y < rect.top) {
+            dy = rect.top - y;
+        } else if (y > rect.bottom) {
+            dy = y - rect.bottom;
+        }
+        return dx * dx + dy * dy;
+    }
+
+    private boolean isLeftTextKey(RectF rect, KeySpec key) {
+        return isTextInputKey(key) && rect.centerX() < keyboardTextCenterX();
+    }
+
+    private boolean isRightTextKey(RectF rect, KeySpec key) {
+        return isTextInputKey(key) && rect.centerX() > keyboardTextCenterX();
+    }
+
+    private boolean isTextInputKey(KeySpec key) {
+        return key.type == KeySpec.Type.HANGUL_CONSONANT
+                || key.type == KeySpec.Type.HANGUL_VOWEL
+                || key.type == KeySpec.Type.CHARACTER;
+    }
+
+    private float keyboardTextCenterX() {
+        return keyboardLeftInset() + keyboardContentWidth() * 0.5f;
     }
 
     private String spaceSymbolForGesture(KeyBounds keyBounds) {
@@ -1538,7 +2148,23 @@ public class KeyboardSurfaceView extends View {
     }
 
     public interface GestureTraceListener {
+        void onConsonantTouch(ConsonantTouch touch);
+
         void onGestureTrace(GestureTrace trace);
+    }
+
+    public static class ConsonantTouch {
+        public final Consonant actualConsonant;
+        public final RectF actualKeyRect;
+        public final float touchX;
+        public final float touchY;
+
+        ConsonantTouch(Consonant actualConsonant, RectF actualKeyRect, float touchX, float touchY) {
+            this.actualConsonant = actualConsonant;
+            this.actualKeyRect = actualKeyRect;
+            this.touchX = touchX;
+            this.touchY = touchY;
+        }
     }
 
     public static class GestureTrace {
@@ -1586,6 +2212,17 @@ public class KeyboardSurfaceView extends View {
             this.rect = rect;
             this.toolbar = toolbar;
             this.clipboard = clipboard;
+        }
+    }
+
+    private static class DeferredPointerTap {
+        final int pointerId;
+        final KeyBounds keyBounds;
+        boolean released;
+
+        DeferredPointerTap(int pointerId, KeyBounds keyBounds) {
+            this.pointerId = pointerId;
+            this.keyBounds = keyBounds;
         }
     }
 

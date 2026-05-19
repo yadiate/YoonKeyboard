@@ -1,4 +1,4 @@
-package com.example.eightwayime;
+package com.yadiate.yoonkeyboard;
 
 import android.app.Activity;
 import android.content.Context;
@@ -22,6 +22,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewParent;
 import android.view.Window;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -33,10 +34,8 @@ import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
-import com.example.eightwayime.hangul.Consonant;
-import com.example.eightwayime.hangul.GestureCalibration;
-import com.example.eightwayime.ime.KeyboardMode;
-import com.example.eightwayime.ime.KeyboardSurfaceView;
+import com.yadiate.yoonkeyboard.hangul.Consonant;
+import com.yadiate.yoonkeyboard.hangul.GestureCalibration;
 
 import java.util.Arrays;
 import java.util.List;
@@ -63,17 +62,7 @@ public class MainActivity extends Activity {
             "사려 깊은 수연이는 새벽에 종이를 조용히 버려",
             "아영이는 우유와 야채를 사려고 시장으로 걸어가",
             "자주 웃는 지우는 종이 위에 여러 가지 무늬를 그려",
-            "차가운 차창 너머로 초여름 비구름이 천천히 흘러",
-            "카페 구석의 커다란 쿠션 위에 키 작은 아이가 쉬어",
-            "타이어 자국을 따라 태윤이는 터널 입구로 달려",
-            "파란 파도 위로 표류하던 배가 평화롭게 항구에 닿아",
-            "하얀 하늘 아래 혜진이는 호수 주변을 한참 걸어",
-            "겨우 일어난 규리는 교과서 여백에 그림을 남겨",
-            "대문으로 돌아온 도현이는 온화한 차를 권해",
-            "보라는 노을 아래 푸른 풀을 바라보아",
-            "수지는 넘어간 의자를 세우고 종이를 붙여",
-            "지우는 국수 냄새가 퍼지자 자리에서 일어나",
-            "굽은 길 끝에서 윤호는 외로운 은행나무를 오래 보아"
+            "차가운 차창 너머로 초여름 비구름이 천천히 흘러"
     };
 
     private SharedPreferences prefs;
@@ -307,7 +296,7 @@ public class MainActivity extends Activity {
         addSwitchRow(card, "보정 사용", "수집한 손 움직임으로 대각선과 긴 획을 판단합니다.",
                 SettingsStore.KEY_GESTURE_CALIBRATION_ENABLED, false);
         addDivider(card);
-        addActionRow(card, "보정 시작", "20개 문장을 따라 치며 자음별 획 기준을 학습합니다.",
+        addActionRow(card, "보정 시작", "문장을 따라 치다가 충분하면 중간에 바로 완성할 수 있습니다.",
                 this::showCalibrationPracticePage);
         addDivider(card);
         addActionRow(card, "보정값 초기화", "저장된 대각선과 긴 획 기준을 지웁니다.", () -> {
@@ -475,7 +464,7 @@ public class MainActivity extends Activity {
         inputView.setSingleLine(true);
         inputView.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         inputView.setImeOptions(EditorInfo.IME_ACTION_NONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
-        inputView.setPrivateImeOptions("com.example.eightwayime.CALIBRATION");
+        inputView.setPrivateImeOptions("com.yadiate.yoonkeyboard.CALIBRATION");
         inputView.setMinHeight(dp(64));
         inputView.setGravity(Gravity.CENTER_VERTICAL);
         inputView.setPadding(dp(16), dp(12), dp(16), dp(12));
@@ -484,11 +473,19 @@ public class MainActivity extends Activity {
         inputParams.setMargins(0, 0, 0, dp(10));
         root.addView(inputView, inputParams);
 
-        TextView hintView = rowSummary("입력칸을 누르면 실제 윤키보드가 올라옵니다. 문장이 맞으면 자동으로 다음 줄로 넘어갑니다.");
+        TextView hintView = rowSummary("입력한 획을 그대로 보정에 반영합니다. 줄 끝까지 치면 다음 줄로 넘어갑니다.");
         hintView.setPadding(dp(4), 0, dp(4), dp(12));
         root.addView(hintView, matchWrap());
 
         ActualCalibrationSession session = new ActualCalibrationSession(progressView, promptView, inputView, hintView);
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionRow.setGravity(Gravity.CENTER);
+        addCalibrationActionButton(actionRow, "보정 지금 완성하기", true, true, session::finishNow);
+        LinearLayout.LayoutParams actionParams = matchWrap();
+        actionParams.setMargins(0, 0, 0, dp(12));
+        root.addView(actionRow, actionParams);
+
         inputView.addTextChangedListener(session);
         inputView.setOnClickListener(v -> showSoftKeyboard(inputView));
         inputView.setOnFocusChangeListener((v, hasFocus) -> {
@@ -575,6 +572,9 @@ public class MainActivity extends Activity {
         addChoiceRow(card, "스킨", SettingsStore.SKINS, SettingsStore.KEY_SKIN, 0,
                 () -> showMainPage(true, -1));
         addDivider(card);
+        addChoiceRow(card, "자음 레이아웃", SettingsStore.HANGUL_TYPES, SettingsStore.KEY_HANGUL_TYPE,
+                SettingsStore.HANGUL_LAYOUT_YUN, () -> showMainPage(true, -1));
+        addDivider(card);
         addKeyboardSizeRow(card);
     }
 
@@ -585,7 +585,7 @@ public class MainActivity extends Activity {
         addDivider(card);
         addCalibrationRow(card);
         addDivider(card);
-        addChoiceRow(card, "길게 누르기 시간", SettingsStore.DOUBLE_TAP_TIMES,
+        addChoiceRow(card, "쌍자음 입력 시간", SettingsStore.DOUBLE_TAP_TIMES,
                 SettingsStore.KEY_DOUBLE_TAP_TIME, 1, () -> showMainPage(true, -1));
 
         addSectionTitle("피드백");
@@ -1091,6 +1091,7 @@ public class MainActivity extends Activity {
         private int lineIndex;
         private boolean advancing;
         private boolean editingProgrammatically;
+        private boolean finished;
 
         ActualCalibrationSession(CalibrationProgressView progressView, TextView promptView, EditText inputView,
                                  TextView hintView) {
@@ -1118,31 +1119,45 @@ public class MainActivity extends Activity {
         }
 
         void refresh() {
+            if (finished) {
+                return;
+            }
             String sentence = currentSentence();
             String visible = inputView.getText().toString();
             promptView.setText(sentence);
 
-            int prefix = matchingPrefixLength(sentence, visible);
-            if (visible.length() > prefix) {
-                hintView.setText("다른 부분이 있습니다. 지우고 이어서 다시 입력하세요.");
-                inputView.setTextColor(Color.rgb(190, 83, 32));
-            } else {
-                hintView.setText("입력칸을 누르면 실제 윤키보드가 올라옵니다. 문장이 맞으면 자동으로 다음 줄로 넘어갑니다.");
-                inputView.setTextColor(TEXT_PRIMARY);
-            }
+            hintView.setText("입력한 획을 그대로 보정에 반영합니다. 줄 끝까지 치면 다음 줄로 넘어갑니다.");
+            inputView.setTextColor(TEXT_PRIMARY);
 
-            int completedChars = calibrationCharactersBeforeLine(lineIndex) + prefix;
+            int completedChars = calibrationCharactersBeforeLine(lineIndex)
+                    + Math.min(visible.length(), sentence.length());
             progressView.setState(completedChars / (float) totalCalibrationCharacters(), lineIndex,
                     SettingsStore.gestureCalibrationSessionSampleCount(MainActivity.this));
 
-            if (!advancing && visible.equals(sentence)) {
+            if (!advancing && visible.length() >= sentence.length()) {
                 advancing = true;
                 root.postDelayed(this::advanceLine, 260);
             }
         }
 
+        void finishNow() {
+            if (finished) {
+                return;
+            }
+            int sampleCount = SettingsStore.gestureCalibrationSessionSampleCount(MainActivity.this);
+            if (sampleCount <= 0) {
+                hintView.setText("아직 저장할 획이 없습니다. 한 글자 이상 드래그 입력한 뒤 완료할 수 있습니다.");
+                inputView.setTextColor(Color.rgb(180, 80, 48));
+                return;
+            }
+            saveCalibration();
+        }
+
         private void advanceLine() {
-            if (!inputView.getText().toString().equals(currentSentence())) {
+            if (finished) {
+                return;
+            }
+            if (inputView.getText().toString().length() < currentSentence().length()) {
                 advancing = false;
                 refresh();
                 return;
@@ -1168,6 +1183,7 @@ public class MainActivity extends Activity {
         }
 
         private void saveCalibration() {
+            finished = true;
             SettingsStore.Snapshot snapshot = SettingsStore.load(MainActivity.this);
             List<GestureCalibration.Sample> samples = SettingsStore.loadGestureCalibrationSamples(MainActivity.this);
             GestureCalibration.Profile profile = GestureCalibration.train(samples,
@@ -1566,7 +1582,7 @@ public class MainActivity extends Activity {
         private void drawCalibrationKey(Canvas canvas, CalibrationKeyCell cell) {
             boolean selectable = cell.consonant != null;
             boolean selected = selectable && cell.consonant == selectedConsonant;
-            boolean calibrated = selectable && hasAnyDiagonal(cell.consonant);
+            boolean calibrated = selectable && hasAnyCalibration(cell.consonant);
             int keyColor = selectable ? Color.rgb(249, 251, 252) : Color.rgb(204, 214, 220);
             if (selected) {
                 keyColor = Color.rgb(232, 241, 255);
@@ -1595,9 +1611,12 @@ public class MainActivity extends Activity {
             keyboardPaint.setTypeface(Typeface.DEFAULT);
         }
 
-        private boolean hasAnyDiagonal(Consonant consonant) {
+        private boolean hasAnyCalibration(Consonant consonant) {
             if (profile == null) {
                 return false;
+            }
+            if (profile.touchProfile(consonant) != null) {
+                return true;
             }
             for (GestureCalibration.DirectionClass directionClass : EDITABLE_DIAGONALS) {
                 if (profile.directionProfile(consonant, directionClass) != null) {
@@ -1706,11 +1725,9 @@ public class MainActivity extends Activity {
 
         private final Paint previewPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF keyboardRect = new RectF();
-        private final RectF keyboardChildRect = new RectF();
         private final RectF resetRect = new RectF();
         private final RectF doneRect = new RectF();
         private final Runnable doneAction;
-        private final KeyboardSurfaceView keyboardView;
         private int leftPercent;
         private int rightPercent;
         private int topPercent;
@@ -1727,13 +1744,6 @@ public class MainActivity extends Activity {
             setWillNotDraw(false);
             setClipChildren(false);
             reloadSize();
-            keyboardView = new KeyboardSurfaceView(context);
-            keyboardView.setMode(KeyboardMode.HANGUL);
-            keyboardView.setSettings(previewKeyboardSettings());
-            keyboardView.setBottomSafeInsetEnabled(false);
-            keyboardView.setEnabled(false);
-            keyboardView.setClickable(false);
-            addView(keyboardView, new FrameLayout.LayoutParams(1, 1));
         }
 
         void setAdjustmentMode(int adjustmentMode) {
@@ -1749,16 +1759,11 @@ public class MainActivity extends Activity {
             int height = MeasureSpec.getSize(heightMeasureSpec);
             setMeasuredDimension(width, height);
             computeKeyboardRect(previewBounds(width, height));
-            keyboardView.measure(
-                    MeasureSpec.makeMeasureSpec(Math.max(1, Math.round(keyboardChildRect.width())), MeasureSpec.EXACTLY),
-                    MeasureSpec.makeMeasureSpec(Math.max(1, Math.round(keyboardChildRect.height())), MeasureSpec.EXACTLY));
         }
 
         @Override
         protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
             computeKeyboardRect(previewBounds());
-            keyboardView.layout(Math.round(keyboardChildRect.left), Math.round(keyboardChildRect.top),
-                    Math.round(keyboardChildRect.right), Math.round(keyboardChildRect.bottom));
         }
 
         @Override
@@ -1771,8 +1776,24 @@ public class MainActivity extends Activity {
         protected void dispatchDraw(Canvas canvas) {
             computeKeyboardRect(previewBounds());
             super.dispatchDraw(canvas);
+            drawKeyboardPreview(canvas);
             drawResizeChrome(canvas);
             drawPreviewButtons(canvas);
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent event) {
+            return onTouchEvent(event);
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent event) {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                computeKeyboardRect(previewBounds());
+                return buttonAt(event.getX(), event.getY()) != BUTTON_NONE
+                        || currentModeHandleAt(event.getX(), event.getY()) != HANDLE_NONE;
+            }
+            return activeButton != BUTTON_NONE || activeHandle != HANDLE_NONE;
         }
 
         @Override
@@ -1783,7 +1804,7 @@ public class MainActivity extends Activity {
                     activeButton = buttonAt(event.getX(), event.getY());
                     activeHandle = activeButton == BUTTON_NONE ? currentModeHandleAt(event.getX(), event.getY()) : HANDLE_NONE;
                     if (activeButton != BUTTON_NONE || activeHandle != HANDLE_NONE) {
-                        getParent().requestDisallowInterceptTouchEvent(true);
+                        requestParentTouchIntercept(true);
                         return true;
                     }
                     return true;
@@ -1798,24 +1819,33 @@ public class MainActivity extends Activity {
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (activeButton == BUTTON_RESET && resetRect.contains(event.getX(), event.getY())) {
-                        resetSize();
-                    } else if (activeButton == BUTTON_DONE && doneRect.contains(event.getX(), event.getY())) {
-                        doneAction.run();
-                    }
+                    boolean shouldReset = activeButton == BUTTON_RESET && resetRect.contains(event.getX(), event.getY());
+                    boolean shouldFinish = activeButton == BUTTON_DONE && doneRect.contains(event.getX(), event.getY());
                     activeButton = BUTTON_NONE;
                     activeHandle = HANDLE_NONE;
-                    getParent().requestDisallowInterceptTouchEvent(false);
+                    requestParentTouchIntercept(false);
                     invalidate();
+                    if (shouldReset) {
+                        resetSize();
+                    } else if (shouldFinish) {
+                        doneAction.run();
+                    }
                     return true;
                 case MotionEvent.ACTION_CANCEL:
                     activeButton = BUTTON_NONE;
                     activeHandle = HANDLE_NONE;
-                    getParent().requestDisallowInterceptTouchEvent(false);
+                    requestParentTouchIntercept(false);
                     invalidate();
                     return true;
                 default:
                     return super.onTouchEvent(event);
+            }
+        }
+
+        private void requestParentTouchIntercept(boolean disallow) {
+            ViewParent parent = getParent();
+            if (parent != null) {
+                parent.requestDisallowInterceptTouchEvent(disallow);
             }
         }
 
@@ -1836,7 +1866,6 @@ public class MainActivity extends Activity {
             SettingsStore.putInt(MainActivity.this, SettingsStore.KEY_KEYBOARD_BOTTOM_PERCENT, bottomPercent);
             SettingsStore.putInt(MainActivity.this, SettingsStore.KEY_KEYBOARD_LAYOUT_LEFT_PERCENT, layoutLeftPercent);
             SettingsStore.putInt(MainActivity.this, SettingsStore.KEY_KEYBOARD_LAYOUT_RIGHT_PERCENT, layoutRightPercent);
-            keyboardView.setSettings(previewKeyboardSettings());
         }
 
         private void resetSize() {
@@ -1854,17 +1883,6 @@ public class MainActivity extends Activity {
             invalidate();
         }
 
-        private SettingsStore.Snapshot previewKeyboardSettings() {
-            SettingsStore.Snapshot snapshot = SettingsStore.load(MainActivity.this);
-            snapshot.keyboardLeftPercent = SettingsStore.DEFAULT_KEYBOARD_LEFT_PERCENT;
-            snapshot.keyboardRightPercent = SettingsStore.DEFAULT_KEYBOARD_RIGHT_PERCENT;
-            snapshot.keyboardTopPercent = SettingsStore.DEFAULT_KEYBOARD_TOP_PERCENT;
-            snapshot.keyboardBottomPercent = SettingsStore.DEFAULT_KEYBOARD_BOTTOM_PERCENT;
-            snapshot.keyboardLayoutLeftPercent = layoutLeftPercent;
-            snapshot.keyboardLayoutRightPercent = layoutRightPercent;
-            return snapshot;
-        }
-
         private RectF previewBounds() {
             return previewBounds(getWidth(), getHeight());
         }
@@ -1879,7 +1897,158 @@ public class MainActivity extends Activity {
                     bounds.top + bounds.height() * topPercent / 100f,
                     bounds.left + bounds.width() * rightPercent / 100f,
                     bounds.top + bounds.height() * bottomPercent / 100f);
-            keyboardChildRect.set(keyboardRect);
+        }
+
+        private void drawKeyboardPreview(Canvas canvas) {
+            SettingsStore.KeyboardTheme theme = SettingsStore.load(MainActivity.this).theme;
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(theme.background);
+            canvas.drawRoundRect(keyboardRect, dp(2), dp(2), previewPaint);
+
+            float toolbarHeight = Math.min(dp(52), keyboardRect.height() * 0.2f);
+            RectF toolbarRect = new RectF(keyboardRect.left, keyboardRect.top, keyboardRect.right,
+                    keyboardRect.top + toolbarHeight);
+            drawPreviewToolbar(canvas, toolbarRect, theme);
+
+            float gap = dp(4);
+            float leftLineX = layoutLineX(layoutLeftPercent);
+            float rightLineX = layoutLineX(layoutRightPercent);
+            float rowsTop = toolbarRect.bottom + gap;
+            float rowHeight = (keyboardRect.bottom - rowsTop - gap * 4f) / 4f;
+            if (rowHeight <= dp(8)) {
+                return;
+            }
+
+            drawPreviewSideColumn(canvas, keyboardRect.left + gap, rowsTop,
+                    Math.max(dp(30), leftLineX - keyboardRect.left - gap * 2f), rowHeight, gap, theme);
+            drawPreviewCenterKeys(canvas, leftLineX + gap, rowsTop,
+                    Math.max(dp(60), rightLineX - leftLineX - gap * 2f), rowHeight, gap, theme);
+            drawPreviewRightColumn(canvas, rightLineX + gap, rowsTop,
+                    Math.max(dp(30), keyboardRect.right - rightLineX - gap * 2f), rowHeight, gap, theme);
+        }
+
+        private void drawPreviewToolbar(Canvas canvas, RectF rect, SettingsStore.KeyboardTheme theme) {
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(theme.background);
+            canvas.drawRect(rect, previewPaint);
+            String[] labels = {"☺", "GIF", "▣", "⚙", "⋮"};
+            float[] weights = {1.1f, 1.5f, 1.1f, 1.1f, 1.0f};
+            float total = 0f;
+            for (float weight : weights) {
+                total += weight;
+            }
+            float x = rect.left;
+            previewPaint.setTextAlign(Paint.Align.CENTER);
+            previewPaint.setStyle(Paint.Style.FILL);
+            for (int i = 0; i < labels.length; i++) {
+                float width = rect.width() * weights[i] / total;
+                previewPaint.setTextSize(dp(i == 1 ? 16 : 24));
+                previewPaint.setFakeBoldText(i == 4);
+                previewPaint.setColor(i == 0 ? Color.rgb(232, 174, 30) : theme.hint);
+                drawPreviewText(canvas, labels[i], x + width / 2f, rect.centerY());
+                x += width;
+            }
+            previewPaint.setFakeBoldText(false);
+        }
+
+        private void drawPreviewSideColumn(Canvas canvas, float left, float top, float width, float rowHeight,
+                                           float gap, SettingsStore.KeyboardTheme theme) {
+            String[] labels = {"Abc", "#★♪", "123", "⚙"};
+            for (int i = 0; i < labels.length; i++) {
+                RectF rect = new RectF(left, top + i * (rowHeight + gap),
+                        left + width, top + i * (rowHeight + gap) + rowHeight);
+                drawPreviewKey(canvas, rect, labels[i], theme, true, false);
+            }
+        }
+
+        private void drawPreviewCenterKeys(Canvas canvas, float left, float top, float width, float rowHeight,
+                                           float gap, SettingsStore.KeyboardTheme theme) {
+            String[][] labels = {
+                    {"ㅋ", "ㄱ", "ㅅ", "ㅈ", "ㅊ"},
+                    {"ㅎ", "ㄴ", "ㅇ", "ㄹ", "ㅁ"},
+                    {"ㅌ", "ㄷ", "ㅂ", "ㅍ", "모음"},
+                    {"←", "→", "!\n? ＿ .", "", "Go"}
+            };
+            float colWidth = (width - gap * 4f) / 5f;
+            for (int row = 0; row < labels.length; row++) {
+                for (int col = 0; col < labels[row].length; col++) {
+                    String label = labels[row][col];
+                    if (label.isEmpty()) {
+                        continue;
+                    }
+                    RectF rect = new RectF(left + col * (colWidth + gap), top + row * (rowHeight + gap),
+                            left + col * (colWidth + gap) + colWidth, top + row * (rowHeight + gap) + rowHeight);
+                    boolean special = row == 3;
+                    drawPreviewKey(canvas, rect, label, theme, special, "Go".equals(label));
+                }
+            }
+        }
+
+        private void drawPreviewRightColumn(Canvas canvas, float left, float top, float width, float rowHeight,
+                                            float gap, SettingsStore.KeyboardTheme theme) {
+            RectF deleteRect = new RectF(left, top, left + width, top + rowHeight * 3f + gap * 2f);
+            drawPreviewKey(canvas, deleteRect, "DEL\n←", theme, true, false);
+            RectF enterRect = new RectF(left, top + 3f * (rowHeight + gap), left + width,
+                    top + 3f * (rowHeight + gap) + rowHeight);
+            drawPreviewKey(canvas, enterRect, "Go", theme, false, true);
+        }
+
+        private void drawPreviewKey(Canvas canvas, RectF rect, String label, SettingsStore.KeyboardTheme theme,
+                                    boolean special, boolean enter) {
+            if (rect.width() <= 1f || rect.height() <= 1f) {
+                return;
+            }
+            int keyColor = enter ? theme.enterKey : (special ? theme.keySpecial : theme.keyNormal);
+            previewPaint.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
+                    lightenColor(keyColor, 0.08f), darkenColor(keyColor, 0.04f), Shader.TileMode.CLAMP));
+            previewPaint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(rect, dp(7), dp(7), previewPaint);
+            previewPaint.setShader(null);
+
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(Math.max(1f, dp(0.6f)));
+            previewPaint.setColor(theme.stroke);
+            canvas.drawRoundRect(rect, dp(7), dp(7), previewPaint);
+
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setTextAlign(Paint.Align.CENTER);
+            previewPaint.setFakeBoldText(false);
+            previewPaint.setColor(enter ? theme.enterText : (special ? theme.hint : theme.text));
+            String[] lines = label.split("\\n", -1);
+            int textSize = label.length() > 2 || lines.length > 1 ? 13 : 22;
+            if ("모음".equals(label)) {
+                textSize = 20;
+            }
+            previewPaint.setTextSize(dp(textSize));
+            Paint.FontMetrics metrics = previewPaint.getFontMetrics();
+            float lineHeight = metrics.descent - metrics.ascent;
+            float firstBaseline = rect.centerY() - lineHeight * (lines.length - 1) / 2f
+                    - (metrics.ascent + metrics.descent) / 2f;
+            for (int i = 0; i < lines.length; i++) {
+                drawPreviewText(canvas, lines[i], rect.centerX(), firstBaseline
+                        + lineHeight * i + (metrics.ascent + metrics.descent) / 2f);
+            }
+        }
+
+        private int lightenColor(int color, float amount) {
+            int red = Color.red(color);
+            int green = Color.green(color);
+            int blue = Color.blue(color);
+            red += Math.round((255 - red) * amount);
+            green += Math.round((255 - green) * amount);
+            blue += Math.round((255 - blue) * amount);
+            return Color.rgb(clampColor(red), clampColor(green), clampColor(blue));
+        }
+
+        private int darkenColor(int color, float amount) {
+            int red = Math.round(Color.red(color) * (1f - amount));
+            int green = Math.round(Color.green(color) * (1f - amount));
+            int blue = Math.round(Color.blue(color) * (1f - amount));
+            return Color.rgb(clampColor(red), clampColor(green), clampColor(blue));
+        }
+
+        private int clampColor(int value) {
+            return Math.max(0, Math.min(255, value));
         }
 
         private void drawResizeChrome(Canvas canvas) {
@@ -2094,6 +2263,11 @@ public class MainActivity extends Activity {
             }
             if (Math.abs(x - rightLineX) <= hit) {
                 return HANDLE_LAYOUT_RIGHT;
+            }
+            if (keyboardRect.contains(x, y)) {
+                return Math.abs(x - leftLineX) <= Math.abs(x - rightLineX)
+                        ? HANDLE_LAYOUT_LEFT
+                        : HANDLE_LAYOUT_RIGHT;
             }
             return HANDLE_NONE;
         }

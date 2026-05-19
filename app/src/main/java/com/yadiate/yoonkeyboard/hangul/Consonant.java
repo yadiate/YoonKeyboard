@@ -1,4 +1,4 @@
-package com.example.eightwayime.hangul;
+package com.yadiate.yoonkeyboard.hangul;
 
 public enum Consonant {
     GIYEOK("ㄱ", 0, 1),
@@ -47,9 +47,35 @@ public enum Consonant {
         return finalIndex > 0;
     }
 
+    public Consonant doubleTapVariant() {
+        switch (this) {
+            case GIYEOK:
+                return SSANG_GIYEOK;
+            case DIGEUT:
+                return SSANG_DIGEUT;
+            case BIEUP:
+                return SSANG_BIEUP;
+            case SIOT:
+                return SSANG_SIOT;
+            case JIEUT:
+                return SSANG_JIEUT;
+            default:
+                return null;
+        }
+    }
+
     public static Consonant fromFinalIndex(int finalIndex) {
         for (Consonant consonant : values()) {
             if (consonant.finalIndex == finalIndex) {
+                return consonant;
+            }
+        }
+        return null;
+    }
+
+    public static Consonant fromLeadingIndex(int leadingIndex) {
+        for (Consonant consonant : values()) {
+            if (consonant.leadingIndex == leadingIndex) {
                 return consonant;
             }
         }

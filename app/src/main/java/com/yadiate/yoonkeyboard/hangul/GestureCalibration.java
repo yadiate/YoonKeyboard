@@ -1,4 +1,4 @@
-package com.example.eightwayime.hangul;
+package com.yadiate.yoonkeyboard.hangul;
 
 import org.json.JSONException;
 import org.json.JSONArray;
@@ -15,6 +15,7 @@ public class GestureCalibration {
     private static final int VERSION = 1;
     private static final int MIN_DIRECTION_SAMPLES = 2;
     private static final int MIN_LONG_SAMPLES = 2;
+    private static final int MIN_TOUCH_SAMPLES = 3;
 
     private GestureCalibration() {
     }
@@ -29,7 +30,8 @@ public class GestureCalibration {
         BOTTOM_RIGHT("BR"),
         BOTTOM_LEFT("BL"),
         LONG_HORIZONTAL("LH"),
-        LONG_VERTICAL("LV");
+        LONG_VERTICAL("LV"),
+        TOUCH("T");
 
         final String code;
 
@@ -153,6 +155,7 @@ public class GestureCalibration {
         List<Float> shortVertical = distances(samples, DirectionClass.UP, DirectionClass.DOWN);
         List<Float> longHorizontal = distances(samples, DirectionClass.LONG_HORIZONTAL);
         List<Float> longVertical = distances(samples, DirectionClass.LONG_VERTICAL);
+        List<Sample> touchSamples = touchSamples(samples);
 
         if (longHorizontal.size() >= MIN_LONG_SAMPLES) {
             profile.longHorizontalMm = longThreshold(shortHorizontal, longHorizontal, fallbackLongMm);
@@ -162,7 +165,29 @@ public class GestureCalibration {
             profile.longVerticalMm = longThreshold(shortVertical, longVertical, fallbackLongMm);
             profile.longVerticalSamples = longVertical.size();
         }
+        if (touchSamples.size() >= MIN_TOUCH_SAMPLES) {
+            profile.touchProfile = buildTouchProfile(touchSamples);
+        }
         return profile;
+    }
+
+    private static TouchProfile buildTouchProfile(List<Sample> samples) {
+        List<Float> xOffsets = new ArrayList<>();
+        List<Float> yOffsets = new ArrayList<>();
+        for (Sample sample : samples) {
+            xOffsets.add(sample.touchXRatio - 0.5f);
+            yOffsets.add(sample.touchYRatio - 0.5f);
+        }
+        float xOffset = clamp(median(xOffsets), -0.38f, 0.38f);
+        float yOffset = clamp(median(yOffsets), -0.34f, 0.34f);
+        List<Float> deviations = new ArrayList<>();
+        for (Sample sample : samples) {
+            float dx = (sample.touchXRatio - 0.5f) - xOffset;
+            float dy = (sample.touchYRatio - 0.5f) - yOffset;
+            deviations.add((float) Math.hypot(dx, dy));
+        }
+        float extraSlop = clamp(median(deviations) * 1.8f + 0.05f, 0.07f, 0.28f);
+        return new TouchProfile(xOffset, yOffset, extraSlop, samples.size());
     }
 
     private static DirectionProfile buildDirectionProfile(List<Sample> samples, float fallbackShortMm,
@@ -212,6 +237,16 @@ public class GestureCalibration {
             }
         }
         return values;
+    }
+
+    private static List<Sample> touchSamples(List<Sample> samples) {
+        List<Sample> filtered = new ArrayList<>();
+        for (Sample sample : samples) {
+            if (sample.hasTouchRatios()) {
+                filtered.add(sample);
+            }
+        }
+        return filtered;
     }
 
     private static boolean isDiagonal(DirectionClass directionClass) {
@@ -277,15 +312,28 @@ public class GestureCalibration {
         public final float dyMm;
         public final float pathMm;
         public final long durationMs;
+        public final float touchXRatio;
+        public final float touchYRatio;
+        public final String actualConsonantLabel;
 
         public Sample(Consonant consonant, int expectedVowel, DirectionClass directionClass,
                       GestureVowelMapper.Trace trace) {
             this(consonant.label(), expectedVowel, directionClass, trace.angleDegrees, trace.distanceMm,
-                    trace.dxMm, trace.dyMm, trace.pathMm, trace.durationMs);
+                    trace.dxMm, trace.dyMm, trace.pathMm, trace.durationMs,
+                    Float.NaN, Float.NaN, "");
+        }
+
+        public Sample(Consonant expectedConsonant, Consonant actualConsonant,
+                      float touchXRatio, float touchYRatio) {
+            this(expectedConsonant.label(), -1, DirectionClass.TOUCH,
+                    0f, 0f, 0f, 0f, 0f, 0L,
+                    touchXRatio, touchYRatio,
+                    actualConsonant == null ? "" : actualConsonant.label());
         }
 
         Sample(String consonantLabel, int expectedVowel, DirectionClass directionClass, float angleDegrees,
-               float distanceMm, float dxMm, float dyMm, float pathMm, long durationMs) {
+               float distanceMm, float dxMm, float dyMm, float pathMm, long durationMs,
+               float touchXRatio, float touchYRatio, String actualConsonantLabel) {
             this.consonantLabel = consonantLabel;
             this.expectedVowel = expectedVowel;
             this.directionClass = directionClass;
@@ -295,6 +343,18 @@ public class GestureCalibration {
             this.dyMm = dyMm;
             this.pathMm = pathMm;
             this.durationMs = durationMs;
+            this.touchXRatio = touchXRatio;
+            this.touchYRatio = touchYRatio;
+            this.actualConsonantLabel = actualConsonantLabel == null ? "" : actualConsonantLabel;
+        }
+
+        boolean hasTouchRatios() {
+            return !Float.isNaN(touchXRatio)
+                    && !Float.isNaN(touchYRatio)
+                    && touchXRatio >= -0.85f
+                    && touchXRatio <= 1.85f
+                    && touchYRatio >= -0.85f
+                    && touchYRatio <= 1.85f;
         }
 
         JSONObject toJson() {
@@ -309,6 +369,13 @@ public class GestureCalibration {
                 object.put("dy", dyMm);
                 object.put("path", pathMm);
                 object.put("duration", durationMs);
+                if (hasTouchRatios()) {
+                    object.put("touchX", touchXRatio);
+                    object.put("touchY", touchYRatio);
+                }
+                if (!actualConsonantLabel.isEmpty()) {
+                    object.put("actualConsonant", actualConsonantLabel);
+                }
             } catch (JSONException ignored) {
             }
             return object;
@@ -335,7 +402,10 @@ public class GestureCalibration {
                     (float) object.optDouble("dx", 0d),
                     (float) object.optDouble("dy", 0d),
                     (float) object.optDouble("path", 0d),
-                    object.optLong("duration", 0L));
+                    object.optLong("duration", 0L),
+                    object.has("touchX") ? (float) object.optDouble("touchX", 0d) : Float.NaN,
+                    object.has("touchY") ? (float) object.optDouble("touchY", 0d) : Float.NaN,
+                    object.optString("actualConsonant", ""));
         }
     }
 
@@ -373,6 +443,41 @@ public class GestureCalibration {
         }
     }
 
+    public static class TouchProfile {
+        public final float centerOffsetXRatio;
+        public final float centerOffsetYRatio;
+        public final float extraSlopRatio;
+        public final int samples;
+
+        TouchProfile(float centerOffsetXRatio, float centerOffsetYRatio,
+                     float extraSlopRatio, int samples) {
+            this.centerOffsetXRatio = centerOffsetXRatio;
+            this.centerOffsetYRatio = centerOffsetYRatio;
+            this.extraSlopRatio = extraSlopRatio;
+            this.samples = samples;
+        }
+
+        JSONObject toJson() throws JSONException {
+            JSONObject object = new JSONObject();
+            object.put("x", centerOffsetXRatio);
+            object.put("y", centerOffsetYRatio);
+            object.put("slop", extraSlopRatio);
+            object.put("samples", samples);
+            return object;
+        }
+
+        static TouchProfile fromJson(JSONObject object) {
+            if (object == null) {
+                return null;
+            }
+            return new TouchProfile(
+                    (float) object.optDouble("x", 0d),
+                    (float) object.optDouble("y", 0d),
+                    (float) object.optDouble("slop", 0.08d),
+                    object.optInt("samples", 0));
+        }
+    }
+
     public static class ConsonantProfile {
         private final EnumMap<DirectionClass, DirectionProfile> directions =
                 new EnumMap<>(DirectionClass.class);
@@ -381,6 +486,7 @@ public class GestureCalibration {
         private int longHorizontalSamples;
         private float longVerticalMm;
         private int longVerticalSamples;
+        private TouchProfile touchProfile;
 
         public int totalSamples() {
             return totalSamples;
@@ -401,6 +507,9 @@ public class GestureCalibration {
             if (longVerticalSamples > 0) {
                 object.put("longV", longVerticalMm);
                 object.put("longVSamples", longVerticalSamples);
+            }
+            if (touchProfile != null && touchProfile.samples >= MIN_TOUCH_SAMPLES) {
+                object.put("touch", touchProfile.toJson());
             }
             return object;
         }
@@ -427,6 +536,10 @@ public class GestureCalibration {
             profile.longHorizontalSamples = object.optInt("longHSamples", 0);
             profile.longVerticalMm = (float) object.optDouble("longV", 0d);
             profile.longVerticalSamples = object.optInt("longVSamples", 0);
+            TouchProfile touchProfile = TouchProfile.fromJson(object.optJSONObject("touch"));
+            if (touchProfile != null && touchProfile.samples >= MIN_TOUCH_SAMPLES) {
+                profile.touchProfile = touchProfile;
+            }
             return profile;
         }
     }
@@ -441,7 +554,10 @@ public class GestureCalibration {
         }
 
         public boolean hasData() {
-            return totalSamples > 0 || !consonants.isEmpty() || profileHasDirections(global);
+            return totalSamples > 0
+                    || !consonants.isEmpty()
+                    || profileHasDirections(global)
+                    || profileHasTouch(global);
         }
 
         public int consonantSamples(Consonant consonant) {
@@ -474,6 +590,12 @@ public class GestureCalibration {
             return profile != null && !profile.directions.isEmpty();
         }
 
+        private boolean profileHasTouch(ConsonantProfile profile) {
+            return profile != null
+                    && profile.touchProfile != null
+                    && profile.touchProfile.samples >= MIN_TOUCH_SAMPLES;
+        }
+
         public DirectionProfile directionProfile(Consonant consonant, DirectionClass directionClass) {
             ConsonantProfile consonantProfile = consonant == null ? null : consonants.get(consonant.label());
             DirectionProfile directionProfile = profileDirection(consonantProfile, directionClass);
@@ -492,6 +614,15 @@ public class GestureCalibration {
                 return global.longHorizontalMm;
             }
             return fallbackMm;
+        }
+
+        public TouchProfile touchProfile(Consonant consonant) {
+            ConsonantProfile consonantProfile = consonant == null ? null : consonants.get(consonant.label());
+            TouchProfile touchProfile = profileTouch(consonantProfile);
+            if (touchProfile != null) {
+                return touchProfile;
+            }
+            return profileTouch(global);
         }
 
         public float longVerticalMm(Consonant consonant, float fallbackMm) {
@@ -554,6 +685,15 @@ public class GestureCalibration {
                 return null;
             }
             return directionProfile;
+        }
+
+        private TouchProfile profileTouch(ConsonantProfile profile) {
+            if (profile == null
+                    || profile.touchProfile == null
+                    || profile.touchProfile.samples < MIN_TOUCH_SAMPLES) {
+                return null;
+            }
+            return profile.touchProfile;
         }
     }
 }

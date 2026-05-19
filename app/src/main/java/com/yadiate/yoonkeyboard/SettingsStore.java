@@ -1,11 +1,11 @@
-package com.example.eightwayime;
+package com.yadiate.yoonkeyboard;
 
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
 
-import com.example.eightwayime.hangul.GestureCalibration;
+import com.yadiate.yoonkeyboard.hangul.GestureCalibration;
 
 import java.util.List;
 
@@ -13,6 +13,7 @@ public class SettingsStore {
     public static final String PREF_NAME = "eight_way_ime_settings";
 
     public static final String KEY_SKIN = "keyboard_skin_type";
+    public static final String KEY_HANGUL_TYPE = "hangul_keyboard_type";
     public static final String KEY_STROKE_LENGTH = "stroke_length";
     public static final String KEY_STROKE_CUSTOM = "stroke_custom_enabled";
     public static final String KEY_STROKE_SHORT_MM_TENTHS = "stroke_short_mm_tenths";
@@ -42,15 +43,18 @@ public class SettingsStore {
     public static final int HANGUL_TYPE_TWO_BEOLSIK_VERTICAL = 1;
     public static final int HANGUL_TYPE_YUN_HORIZONTAL = 2;
     public static final int HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL = 3;
+    public static final int HANGUL_LAYOUT_YUN = 0;
+    public static final int HANGUL_LAYOUT_TWO_BEOLSIK = 1;
     public static final int SKIN_LIGHT = 0;
     public static final int SKIN_DARK = 1;
     public static final int SKIN_SYSTEM = 2;
 
+    public static final String[] HANGUL_TYPES = {"윤키보드", "2벌식"};
     public static final String[] SKINS = {"화이트", "블랙", "시스템 설정 따라가기"};
     public static final String[] STROKE_LENGTHS = {"1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] VIBRATE_LEVELS = {"꺼짐", "1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] DOUBLE_TAP_TIMES = {"1-짧게", "2-보통", "3-길게"};
-    public static final int MIN_CUSTOM_SHORT_MM_TENTHS = 20;
+    public static final int MIN_CUSTOM_SHORT_MM_TENTHS = 5;
     public static final int MAX_CUSTOM_SHORT_MM_TENTHS = 80;
     public static final int MIN_CUSTOM_LONG_MM_TENTHS = 90;
     public static final int MAX_CUSTOM_LONG_MM_TENTHS = 260;
@@ -69,7 +73,7 @@ public class SettingsStore {
     public static final int MIN_KEYBOARD_LAYOUT_SIDE_PERCENT = 8;
     public static final int MIN_KEYBOARD_LAYOUT_CENTER_PERCENT = 44;
     public static final int DEFAULT_KEYBOARD_LAYOUT_LEFT_PERCENT = 15;
-    public static final int DEFAULT_KEYBOARD_LAYOUT_RIGHT_PERCENT = 81;
+    public static final int DEFAULT_KEYBOARD_LAYOUT_RIGHT_PERCENT = 85;
 
     private static final int DEFAULT_SKIN = 0;
     private static final int DEFAULT_STROKE_LENGTH = 2;
@@ -89,7 +93,9 @@ public class SettingsStore {
         SharedPreferences prefs = prefs(context);
         Snapshot snapshot = new Snapshot();
         snapshot.skinIndex = bounded(prefs.getInt(KEY_SKIN, DEFAULT_SKIN), SKINS.length, DEFAULT_SKIN);
-        snapshot.hangulTypeIndex = isLandscape(context) ? HANGUL_TYPE_YUN_HORIZONTAL : HANGUL_TYPE_YUN_VERTICAL;
+        snapshot.hangulLayoutIndex = bounded(prefs.getInt(KEY_HANGUL_TYPE, HANGUL_LAYOUT_YUN),
+                HANGUL_TYPES.length, HANGUL_LAYOUT_YUN);
+        snapshot.hangulTypeIndex = hangulTypeForOrientation(context, snapshot.hangulLayoutIndex);
         snapshot.strokeLengthIndex = bounded(prefs.getInt(KEY_STROKE_LENGTH, DEFAULT_STROKE_LENGTH), STROKE_LENGTHS.length, DEFAULT_STROKE_LENGTH);
         snapshot.customStrokeLength = true;
         int defaultShortStroke = defaultShortStrokeMmTenths(snapshot.strokeLengthIndex);
@@ -341,6 +347,13 @@ public class SettingsStore {
         return context.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
     }
 
+    private static int hangulTypeForOrientation(Context context, int hangulLayoutIndex) {
+        if (hangulLayoutIndex == HANGUL_LAYOUT_TWO_BEOLSIK) {
+            return isLandscape(context) ? HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL : HANGUL_TYPE_TWO_BEOLSIK_VERTICAL;
+        }
+        return isLandscape(context) ? HANGUL_TYPE_YUN_HORIZONTAL : HANGUL_TYPE_YUN_VERTICAL;
+    }
+
     private static KeyboardTheme themeFor(Context context, int index) {
         boolean dark = index == SKIN_DARK || (index == SKIN_SYSTEM && isSystemNightMode(context));
         int[] row = dark
@@ -367,6 +380,7 @@ public class SettingsStore {
 
     public static class Snapshot {
         public int skinIndex;
+        public int hangulLayoutIndex;
         public int hangulTypeIndex;
         public int strokeLengthIndex;
         public boolean customStrokeLength;
@@ -395,6 +409,11 @@ public class SettingsStore {
 
         public int longPressTimeoutMs() {
             int[] values = {350, 500, 700};
+            return values[bounded(doubleTapTimeIndex, values.length, DEFAULT_DOUBLE_TAP_TIME)];
+        }
+
+        public int doubleConsonantTimeoutMs() {
+            int[] values = {260, 380, 520};
             return values[bounded(doubleTapTimeIndex, values.length, DEFAULT_DOUBLE_TAP_TIME)];
         }
 

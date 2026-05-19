@@ -2,24 +2,48 @@ plugins {
     id "com.android.application"
 }
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new java.util.Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { stream ->
+        keystoreProperties.load(stream)
+    }
+}
+gradle.taskGraph.whenReady { graph ->
+    if (!keystorePropertiesFile.exists()
+            && (graph.hasTask(":app:assembleRelease") || graph.hasTask(":app:bundleRelease"))) {
+        throw new GradleException("Missing keystore.properties for release signing.")
+    }
+}
+
 android {
-    namespace "com.example.eightwayime"
+    namespace "com.yadiate.yoonkeyboard"
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.example.eightwayime"
+        applicationId "com.yadiate.yoonkeyboard"
         minSdk 21
         targetSdk 35
-        versionCode 7
-        versionName "0.2.5"
+        versionCode 14
+        versionName "0.2.12"
     }
 
     signingConfigs {
         release {
-            storeFile file("${System.properties['user.home']}/.android/debug.keystore")
-            storePassword "android"
-            keyAlias "androiddebugkey"
-            keyPassword "android"
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties["storeFile"])
+                if (keystoreProperties["storeType"]) {
+                    storeType keystoreProperties["storeType"]
+                }
+                storePassword keystoreProperties["storePassword"]
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+            } else {
+                storeFile file("${System.properties['user.home']}/.android/debug.keystore")
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
         }
     }
 

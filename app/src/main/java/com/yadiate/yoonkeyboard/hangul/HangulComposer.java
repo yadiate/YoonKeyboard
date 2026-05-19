@@ -1,4 +1,4 @@
-package com.example.eightwayime.hangul;
+package com.yadiate.yoonkeyboard.hangul;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -162,6 +162,21 @@ public class HangulComposer {
         return false;
     }
 
+    public boolean replaceSingleConsonant(Consonant base, Consonant replacement) {
+        if (base == null || replacement == null) {
+            return false;
+        }
+        if (lead == base.leadingIndex() && vowel < 0 && tail == 0) {
+            lead = replacement.leadingIndex();
+            return true;
+        }
+        if (vowel >= 0 && tail == base.finalIndex() && replacement.finalIndex() > 0) {
+            tail = replacement.finalIndex();
+            return true;
+        }
+        return false;
+    }
+
     public boolean hasComposingText() {
         return lead >= 0 || vowel >= 0 || tail > 0;
     }
@@ -180,6 +195,20 @@ public class HangulComposer {
         String text = getComposingText();
         reset();
         return text;
+    }
+
+    public static String previewSyllable(Consonant consonant, int vowel) {
+        if (consonant == null || vowel < 0 || vowel >= COMPAT_VOWELS.length) {
+            return "";
+        }
+        return compose(consonant.leadingIndex(), vowel, 0);
+    }
+
+    public static String compatVowel(int vowel) {
+        if (vowel < 0 || vowel >= COMPAT_VOWELS.length) {
+            return "";
+        }
+        return String.valueOf(COMPAT_VOWELS[vowel]);
     }
 
     public void reset() {

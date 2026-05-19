@@ -1,6 +1,6 @@
-package com.example.eightwayime.ime;
+package com.yadiate.yoonkeyboard.ime;
 
-import com.example.eightwayime.hangul.Consonant;
+import com.yadiate.yoonkeyboard.hangul.Consonant;
 
 public class KeySpec {
     public enum Type {

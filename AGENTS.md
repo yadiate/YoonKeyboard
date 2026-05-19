@@ -110,22 +110,22 @@
 PowerShell에서 프로젝트 루트 기준:
 
 ```powershell
-.\gradlew.bat assembleRelease
+.\gradlew.bat assembleRelease bundleRelease
 ```
 
 현재 APK 출력:
 
 ```text
 app\build\outputs\apk\release\app-release.apk
-app\build\outputs\apk\release\EightWayIme-drag-v6.apk
+app\build\outputs\bundle\release\app-release.aab
 ```
 
 현재 빌드 정보:
 
-- applicationId: `com.example.eightwayime`
-- namespace: `com.example.eightwayime`
-- versionCode: `6`
-- versionName: `0.2.4`
+- applicationId: `com.yadiate.yoonkeyboard`
+- namespace: `com.yadiate.yoonkeyboard`
+- versionCode: `14`
+- versionName: `0.2.12`
 - minSdk: `21`
 - targetSdk: `35`
 - compileSdk: `35`
@@ -133,19 +133,19 @@ app\build\outputs\apk\release\EightWayIme-drag-v6.apk
 현재 APK SHA256:
 
 ```text
-6DB249C06F8FF3EA839D7470B415394027DDF98E72C7D0E4785C39B333881D91
+D013045D0DACD7C41240C5B2F8D828E5A2404895A6591CC76AADBB7CED0633A4
 ```
 
 ## 최근 검증
 
-- `.\gradlew.bat assembleRelease` 성공.
-- `apksigner verify --verbose app\build\outputs\apk\release\EightWayIme-drag-v6.apk` 성공.
+- `.\gradlew.bat assembleRelease bundleRelease` 성공.
+- `apksigner verify --verbose app\build\outputs\apk\release\app-release.apk` 성공.
 - 서명 결과:
   - v1: true
   - v2: true
   - v3/v3.1/v4: false
   - SourceStamp: false
-- 현재 릴리즈 빌드는 디버그 keystore로 서명된다. 실제 출시 전에는 정식 release/upload key가 필요하다.
+- 현재 릴리즈 빌드는 로컬 `keystore.properties`가 있으면 `signing/yoonkeyboard-upload.jks`로 서명한다.
 
 ## 배포 상태
 
@@ -169,8 +169,8 @@ app\build\outputs\apk\release\EightWayIme-drag-v6.apk
 ## 출시 준비 메모
 
 - Google Play 신규 앱 출시는 APK가 아니라 `.aab`가 필요하다.
-- 현재 release 서명은 디버그 keystore를 사용한다. 실제 출시 전에는 정식 upload/release key를 만들어야 한다.
-- 출시 전 패키지명 `com.example.eightwayime`은 실제 브랜드 패키지명으로 바꾸는 것이 좋다.
+- 현재 release 서명은 로컬 `keystore.properties`의 `signing/yoonkeyboard-upload.jks`를 사용한다.
+- 패키지명은 `com.yadiate.yoonkeyboard`로 변경했다.
 - Play Console에 필요한 항목:
   - 앱 이름, 아이콘, 스크린샷
   - 개인정보처리방침 URL
@@ -183,7 +183,7 @@ app\build\outputs\apk\release\EightWayIme-drag-v6.apk
 ## 다음 작업 후보
 
 - `.aab` 빌드 태스크 확인 및 Play 내부 테스트용 번들 생성.
-- 정식 패키지명, 앱명, 아이콘 결정.
+- 앱명, 아이콘 결정.
 - 개인정보처리방침 작성.
 - 키보드 설정 UI 다듬기와 깨진 문자열/표시 검수.
 - Fold6 실기기에서 설치 오류가 계속 나면 `adb install` 로그로 정확한 실패 사유 확인.

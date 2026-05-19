@@ -1,4 +1,4 @@
-package com.example.eightwayime.ime;
+package com.yadiate.yoonkeyboard.ime;
 
 public enum KeyboardMode {
     HANGUL,
