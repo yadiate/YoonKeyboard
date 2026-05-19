@@ -201,20 +201,72 @@ public class MainActivity extends Activity {
         LinearLayout customCard = addCard();
         SettingsStore.putBoolean(this, SettingsStore.KEY_STROKE_CUSTOM, true);
 
-        int strokeIndex = currentIndex(SettingsStore.KEY_STROKE_LENGTH, SettingsStore.STROKE_LENGTHS, 2);
-        addStrokeMmRow(customCard, "짧은 획 길이",
+        SettingsStore.Snapshot strokeSnapshot = SettingsStore.load(this);
+        int strokeIndex = strokeSnapshot.strokeLengthIndex;
+        int defaultShortStroke = SettingsStore.defaultShortStrokeMmTenths(strokeIndex);
+        int defaultLongStroke = SettingsStore.defaultLongStrokeMmTenths(strokeIndex);
+        int currentLongStroke = strokeSnapshot.longStrokeMmTenths;
+        int currentShortStroke = strokeSnapshot.shortStrokeMmTenths;
+        SettingsStore.putInt(this, SettingsStore.KEY_STROKE_LONG_MM_TENTHS, currentLongStroke);
+        SettingsStore.putInt(this, SettingsStore.KEY_STROKE_SHORT_MM_TENTHS, currentShortStroke);
+
+        final StrokeMmControl[] shortControl = new StrokeMmControl[1];
+        shortControl[0] = addStrokeMmRow(customCard, "짧은 획 길이",
                 "방향이 바뀐 것으로 인정할 최소 움직임입니다.",
                 SettingsStore.KEY_STROKE_SHORT_MM_TENTHS,
                 SettingsStore.MIN_CUSTOM_SHORT_MM_TENTHS,
-                SettingsStore.MAX_CUSTOM_SHORT_MM_TENTHS,
-                SettingsStore.defaultShortStrokeMmTenths(strokeIndex));
+                SettingsStore.maxCustomShortStrokeMmTenths(currentLongStroke),
+                currentShortStroke,
+                null);
         addDivider(customCard);
         addStrokeMmRow(customCard, "긴 획 길이",
                 "ㅡ, ㅣ 같은 긴 획으로 인정할 움직임입니다.",
                 SettingsStore.KEY_STROKE_LONG_MM_TENTHS,
                 SettingsStore.MIN_CUSTOM_LONG_MM_TENTHS,
                 SettingsStore.MAX_CUSTOM_LONG_MM_TENTHS,
-                SettingsStore.defaultLongStrokeMmTenths(strokeIndex));
+                currentLongStroke,
+                value -> {
+                    int longStroke = SettingsStore.boundedCustomLongStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_LONG_MM_TENTHS, value),
+                            defaultLongStroke);
+                    int shortStroke = SettingsStore.boundedCustomShortStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_SHORT_MM_TENTHS, defaultShortStroke),
+                            longStroke,
+                            defaultShortStroke);
+                    if (shortControl[0] != null) {
+                        shortControl[0].setRangeAndValue(
+                                SettingsStore.MIN_CUSTOM_SHORT_MM_TENTHS,
+                                SettingsStore.maxCustomShortStrokeMmTenths(longStroke),
+                                shortStroke);
+                    }
+                });
+        animatePageFrom(1);
+    }
+
+    private void showDeleteRepeatPage() {
+        Runnable parentPage = () -> showMainPage(true, -1);
+        backAction = parentPage;
+        root.removeAllViews();
+        addDetailHeader("Delete 반복", parentPage);
+
+        addSectionTitle("누르고 있을 때");
+        LinearLayout card = addCard();
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        addDeleteRepeatMsRow(card, "반복 시작시간",
+                "누른 뒤 이 시간이 지나면 연속 삭제로 들어갑니다.",
+                SettingsStore.KEY_DELETE_REPEAT_START_MS,
+                SettingsStore.MIN_DELETE_REPEAT_START_MS,
+                SettingsStore.MAX_DELETE_REPEAT_START_MS,
+                SettingsStore.DELETE_REPEAT_START_STEP_MS,
+                snapshot.deleteRepeatStartMs);
+        addDivider(card);
+        addDeleteRepeatMsRow(card, "삭제 속도",
+                "값이 작을수록 누르고 있을 때 더 빠르게 지워집니다.",
+                SettingsStore.KEY_DELETE_REPEAT_INTERVAL_MS,
+                SettingsStore.MIN_DELETE_REPEAT_INTERVAL_MS,
+                SettingsStore.MAX_DELETE_REPEAT_INTERVAL_MS,
+                SettingsStore.DELETE_REPEAT_INTERVAL_STEP_MS,
+                snapshot.deleteRepeatIntervalMs);
         animatePageFrom(1);
     }
 
@@ -587,6 +639,8 @@ public class MainActivity extends Activity {
         addDivider(card);
         addChoiceRow(card, "쌍자음 입력 시간", SettingsStore.DOUBLE_TAP_TIMES,
                 SettingsStore.KEY_DOUBLE_TAP_TIME, 1, () -> showMainPage(true, -1));
+        addDivider(card);
+        addDeleteRepeatRow(card);
 
         addSectionTitle("피드백");
         LinearLayout feedbackCard = addCard();
@@ -696,6 +750,12 @@ public class MainActivity extends Activity {
         row.setOnClickListener(v -> showCalibrationPage());
     }
 
+    private void addDeleteRepeatRow(LinearLayout card) {
+        TextView summary = addMenuRow(card, "Delete 반복", deleteRepeatSummary(), true);
+        View row = (View) summary.getTag();
+        row.setOnClickListener(v -> showDeleteRepeatPage());
+    }
+
     private void addActionRow(LinearLayout card, String title, String summary, Runnable action) {
         TextView summaryView = addMenuRow(card, title, summary, true);
         View row = (View) summaryView.getTag();
@@ -761,8 +821,38 @@ public class MainActivity extends Activity {
         card.addView(row, matchWrap());
     }
 
-    private void addStrokeMmRow(LinearLayout card, String title, String description, String key,
-                                int minTenths, int maxTenths, int fallbackTenths) {
+    private interface StrokeMmChangeListener {
+        void onChanged(int value);
+    }
+
+    private class StrokeMmControl {
+        private final SeekBar seekBar;
+        private final TextView valueView;
+        private int minTenths;
+        private int maxTenths;
+        private boolean updating;
+
+        StrokeMmControl(SeekBar seekBar, TextView valueView, int minTenths, int maxTenths) {
+            this.seekBar = seekBar;
+            this.valueView = valueView;
+            this.minTenths = minTenths;
+            this.maxTenths = maxTenths;
+        }
+
+        void setRangeAndValue(int minTenths, int maxTenths, int value) {
+            updating = true;
+            this.minTenths = minTenths;
+            this.maxTenths = maxTenths;
+            seekBar.setMax(Math.max(0, (maxTenths - minTenths) / SettingsStore.CUSTOM_STROKE_STEP_TENTHS));
+            seekBar.setProgress(strokeSeekProgress(value, minTenths));
+            updateStrokeMmText(valueView, strokeSeekValue(seekBar.getProgress(), minTenths, maxTenths));
+            updating = false;
+        }
+    }
+
+    private StrokeMmControl addStrokeMmRow(LinearLayout card, String title, String description, String key,
+                                           int minTenths, int maxTenths, int currentTenths,
+                                           StrokeMmChangeListener changeListener) {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(18), dp(14), dp(18), dp(16));
@@ -786,22 +876,90 @@ public class MainActivity extends Activity {
         content.addView(descriptionView, matchWrap());
 
         SeekBar seekBar = new SeekBar(this);
-        int current = prefs.getInt(key, fallbackTenths);
-        current = key.equals(SettingsStore.KEY_STROKE_SHORT_MM_TENTHS)
-                ? SettingsStore.boundedCustomShortStrokeMmTenths(current, fallbackTenths)
-                : SettingsStore.boundedCustomLongStrokeMmTenths(current, fallbackTenths);
         seekBar.setMax((maxTenths - minTenths) / SettingsStore.CUSTOM_STROKE_STEP_TENTHS);
-        seekBar.setProgress(strokeSeekProgress(current, minTenths));
+        seekBar.setProgress(strokeSeekProgress(currentTenths, minTenths));
         content.addView(seekBar, matchWrap());
         card.addView(content, matchWrap());
 
+        StrokeMmControl control = new StrokeMmControl(seekBar, valueView, minTenths, maxTenths);
         updateStrokeMmText(valueView, strokeSeekValue(seekBar.getProgress(), minTenths, maxTenths));
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int value = strokeSeekValue(progress, minTenths, maxTenths);
+                if (control.updating) {
+                    return;
+                }
+                int value = strokeSeekValue(progress, control.minTenths, control.maxTenths);
                 SettingsStore.putInt(MainActivity.this, key, value);
-                updateStrokeMmText(valueView, value);
+                int savedValue = prefs.getInt(key, value);
+                if (SettingsStore.KEY_STROKE_SHORT_MM_TENTHS.equals(key)) {
+                    int strokeIndex = currentIndex(SettingsStore.KEY_STROKE_LENGTH, SettingsStore.STROKE_LENGTHS, 2);
+                    int longStroke = SettingsStore.boundedCustomLongStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_LONG_MM_TENTHS,
+                                    SettingsStore.defaultLongStrokeMmTenths(strokeIndex)),
+                            SettingsStore.defaultLongStrokeMmTenths(strokeIndex));
+                    savedValue = SettingsStore.boundedCustomShortStrokeMmTenths(savedValue, longStroke,
+                            SettingsStore.defaultShortStrokeMmTenths(strokeIndex));
+                } else if (SettingsStore.KEY_STROKE_LONG_MM_TENTHS.equals(key)) {
+                    int strokeIndex = currentIndex(SettingsStore.KEY_STROKE_LENGTH, SettingsStore.STROKE_LENGTHS, 2);
+                    savedValue = SettingsStore.boundedCustomLongStrokeMmTenths(savedValue,
+                            SettingsStore.defaultLongStrokeMmTenths(strokeIndex));
+                }
+                control.setRangeAndValue(control.minTenths, control.maxTenths, savedValue);
+                if (changeListener != null) {
+                    changeListener.onChanged(savedValue);
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+        return control;
+    }
+
+    private void addDeleteRepeatMsRow(LinearLayout card, String title, String description, String key,
+                                      int minMs, int maxMs, int stepMs, int currentMs) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(14), dp(18), dp(16));
+
+        LinearLayout topLine = new LinearLayout(this);
+        topLine.setOrientation(LinearLayout.HORIZONTAL);
+        topLine.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView titleView = rowTitle(title);
+        topLine.addView(titleView, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        TextView valueView = rowTitle("");
+        valueView.setGravity(Gravity.END);
+        topLine.addView(valueView, new LinearLayout.LayoutParams(dp(82),
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        content.addView(topLine, matchWrap());
+
+        TextView descriptionView = rowSummary(description);
+        descriptionView.setPadding(0, dp(4), 0, dp(8));
+        content.addView(descriptionView, matchWrap());
+
+        int safeValue = boundedDeleteRepeatValue(key, currentMs);
+        SeekBar seekBar = new SeekBar(this);
+        seekBar.setMax((maxMs - minMs) / stepMs);
+        seekBar.setProgress(deleteRepeatSeekProgress(safeValue, minMs, stepMs));
+        content.addView(seekBar, matchWrap());
+        card.addView(content, matchWrap());
+
+        updateDeleteRepeatMsText(valueView, deleteRepeatSeekValue(seekBar.getProgress(), minMs, maxMs, stepMs));
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int value = deleteRepeatSeekValue(progress, minMs, maxMs, stepMs);
+                SettingsStore.putInt(MainActivity.this, key, value);
+                updateDeleteRepeatMsText(valueView, boundedDeleteRepeatValue(key, value));
             }
 
             @Override
@@ -833,17 +991,34 @@ public class MainActivity extends Activity {
     }
 
     private String strokeLengthSummary() {
-        int index = currentIndex(SettingsStore.KEY_STROKE_LENGTH, SettingsStore.STROKE_LENGTHS, 2);
-        int shortStroke = SettingsStore.boundedCustomShortStrokeMmTenths(
-                prefs.getInt(SettingsStore.KEY_STROKE_SHORT_MM_TENTHS,
-                        SettingsStore.defaultShortStrokeMmTenths(index)),
-                SettingsStore.defaultShortStrokeMmTenths(index));
-        int longStroke = SettingsStore.boundedCustomLongStrokeMmTenths(
-                prefs.getInt(SettingsStore.KEY_STROKE_LONG_MM_TENTHS,
-                        SettingsStore.defaultLongStrokeMmTenths(index)),
-                SettingsStore.defaultLongStrokeMmTenths(index));
-        return "짧은 " + SettingsStore.strokeMmLabel(shortStroke)
-                + " · 긴 " + SettingsStore.strokeMmLabel(longStroke);
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        return "짧은 " + SettingsStore.strokeMmLabel(snapshot.shortStrokeMmTenths)
+                + " · 긴 " + SettingsStore.strokeMmLabel(snapshot.longStrokeMmTenths);
+    }
+
+    private int deleteRepeatSeekProgress(int value, int minMs, int stepMs) {
+        return Math.max(0, Math.round((value - minMs) / (float) stepMs));
+    }
+
+    private int deleteRepeatSeekValue(int progress, int minMs, int maxMs, int stepMs) {
+        int value = minMs + progress * stepMs;
+        return Math.max(minMs, Math.min(value, maxMs));
+    }
+
+    private int boundedDeleteRepeatValue(String key, int value) {
+        if (SettingsStore.KEY_DELETE_REPEAT_START_MS.equals(key)) {
+            return SettingsStore.boundedDeleteRepeatStartMs(value);
+        }
+        return SettingsStore.boundedDeleteRepeatIntervalMs(value);
+    }
+
+    private void updateDeleteRepeatMsText(TextView valueText, int ms) {
+        valueText.setText(ms + "ms");
+    }
+
+    private String deleteRepeatSummary() {
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        return "시작 " + snapshot.deleteRepeatStartMs + "ms · 간격 " + snapshot.deleteRepeatIntervalMs + "ms";
     }
 
     private String keyboardSizeSummary() {

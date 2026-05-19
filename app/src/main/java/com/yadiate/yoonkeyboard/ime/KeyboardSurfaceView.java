@@ -38,8 +38,6 @@ public class KeyboardSurfaceView extends View {
     private static final int TALL_KEYBOARD_BODY_DP = 310;
     private static final int GESTURE_START_SLOP_DP = 10;
     private static final int INVALID_POINTER_ID = -1;
-    private static final int DELETE_REPEAT_INITIAL_DELAY_MS = 180;
-    private static final int DELETE_REPEAT_INTERVAL_MS = 32;
     private static final int KEY_HIT_SLOP_DP = 8;
     private static final int LEFT_KEY_EXTRA_HIT_SLOP_DP = 5;
     private static final float LEFT_KEY_HIT_SCORE_SCALE = 0.72f;
@@ -859,7 +857,7 @@ public class KeyboardSurfaceView extends View {
 
     private int longPressDelayMs(KeySpec key) {
         if (key.type == KeySpec.Type.DELETE) {
-            return DELETE_REPEAT_INITIAL_DELAY_MS;
+            return deleteRepeatStartMs();
         }
         return settings.longPressTimeoutMs();
     }
@@ -900,11 +898,23 @@ public class KeyboardSurfaceView extends View {
                     return;
                 }
                 listener.onKey(key);
-                postDelayed(this, DELETE_REPEAT_INTERVAL_MS);
+                postDelayed(this, deleteRepeatIntervalMs());
             }
         };
-        postDelayed(deleteRepeatRunnable, DELETE_REPEAT_INTERVAL_MS);
+        postDelayed(deleteRepeatRunnable, deleteRepeatIntervalMs());
         invalidate();
+    }
+
+    private int deleteRepeatStartMs() {
+        return settings == null
+                ? SettingsStore.DEFAULT_DELETE_REPEAT_START_MS
+                : settings.deleteRepeatStartMs();
+    }
+
+    private int deleteRepeatIntervalMs() {
+        return settings == null
+                ? SettingsStore.DEFAULT_DELETE_REPEAT_INTERVAL_MS
+                : settings.deleteRepeatIntervalMs();
     }
 
     private void cancelScheduledLongPress() {

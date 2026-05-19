@@ -74,6 +74,15 @@ public class EightWayInputMethodService extends InputMethodService
     }
 
     @Override
+    public void onStartInputView(EditorInfo info, boolean restarting) {
+        super.onStartInputView(info, restarting);
+        settings = SettingsStore.load(this);
+        if (keyboardView != null) {
+            keyboardView.setSettings(settings);
+        }
+    }
+
+    @Override
     public void onFinishInput() {
         commitComposingText();
         resetDoubleConsonantTapState();

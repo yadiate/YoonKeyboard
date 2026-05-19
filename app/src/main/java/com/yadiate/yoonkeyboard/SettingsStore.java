@@ -18,7 +18,10 @@ public class SettingsStore {
     public static final String KEY_STROKE_CUSTOM = "stroke_custom_enabled";
     public static final String KEY_STROKE_SHORT_MM_TENTHS = "stroke_short_mm_tenths";
     public static final String KEY_STROKE_LONG_MM_TENTHS = "stroke_long_mm_tenths";
+    private static final String KEY_STROKE_MM_SCALE_VERSION = "stroke_mm_scale_version";
     public static final String KEY_DOUBLE_TAP_TIME = "double_tap_time";
+    public static final String KEY_DELETE_REPEAT_START_MS = "delete_repeat_start_ms";
+    public static final String KEY_DELETE_REPEAT_INTERVAL_MS = "delete_repeat_interval_ms";
     public static final String KEY_VIBRATE_ON = "vibrate_on";
     public static final String KEY_VIBRATE_LEVEL = "vibrate_level";
     public static final String KEY_SOUND_ON = "sound_on";
@@ -54,11 +57,20 @@ public class SettingsStore {
     public static final String[] STROKE_LENGTHS = {"1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] VIBRATE_LEVELS = {"꺼짐", "1-아주짧게", "2-짧게", "3-보통", "4-길게", "5-아주길게"};
     public static final String[] DOUBLE_TAP_TIMES = {"1-짧게", "2-보통", "3-길게"};
-    public static final int MIN_CUSTOM_SHORT_MM_TENTHS = 5;
-    public static final int MAX_CUSTOM_SHORT_MM_TENTHS = 80;
-    public static final int MIN_CUSTOM_LONG_MM_TENTHS = 90;
-    public static final int MAX_CUSTOM_LONG_MM_TENTHS = 260;
-    public static final int CUSTOM_STROKE_STEP_TENTHS = 5;
+    public static final int MIN_CUSTOM_SHORT_MM_TENTHS = 25;
+    public static final int MAX_CUSTOM_SHORT_MM_TENTHS = 800;
+    public static final int MIN_CUSTOM_LONG_MM_TENTHS = 500;
+    public static final int MAX_CUSTOM_LONG_MM_TENTHS = 2600;
+    public static final int MIN_CUSTOM_STROKE_GAP_MM_TENTHS = 100;
+    public static final int CUSTOM_STROKE_STEP_TENTHS = 25;
+    public static final int MIN_DELETE_REPEAT_START_MS = 60;
+    public static final int MAX_DELETE_REPEAT_START_MS = 600;
+    public static final int DELETE_REPEAT_START_STEP_MS = 20;
+    public static final int DEFAULT_DELETE_REPEAT_START_MS = 180;
+    public static final int MIN_DELETE_REPEAT_INTERVAL_MS = 16;
+    public static final int MAX_DELETE_REPEAT_INTERVAL_MS = 120;
+    public static final int DELETE_REPEAT_INTERVAL_STEP_MS = 4;
+    public static final int DEFAULT_DELETE_REPEAT_INTERVAL_MS = 32;
     public static final int MIN_KEYBOARD_WIDTH_PERCENT = 72;
     public static final int MAX_KEYBOARD_WIDTH_PERCENT = 100;
     public static final int MIN_KEYBOARD_HEIGHT_PERCENT = 82;
@@ -79,8 +91,10 @@ public class SettingsStore {
     private static final int DEFAULT_STROKE_LENGTH = 2;
     private static final int DEFAULT_DOUBLE_TAP_TIME = 1;
     private static final int DEFAULT_VIBRATE_LEVEL = 1;
-    private static final int[] DEFAULT_SHORT_STROKE_MM_TENTHS = {22, 28, 36, 46, 58};
-    private static final int[] DEFAULT_LONG_STROKE_MM_TENTHS = {90, 110, 135, 165, 200};
+    private static final int STROKE_MM_SCALE_VERSION = 2;
+    private static final int LEGACY_STROKE_MM_SCALE_MULTIPLIER = 10;
+    private static final int[] DEFAULT_SHORT_STROKE_MM_TENTHS = {225, 275, 350, 450, 575};
+    private static final int[] DEFAULT_LONG_STROKE_MM_TENTHS = {900, 1100, 1350, 1650, 2000};
 
     private SettingsStore() {
     }
@@ -91,6 +105,7 @@ public class SettingsStore {
 
     public static Snapshot load(Context context) {
         SharedPreferences prefs = prefs(context);
+        ensureStrokeMmScaleVersion(prefs);
         Snapshot snapshot = new Snapshot();
         snapshot.skinIndex = bounded(prefs.getInt(KEY_SKIN, DEFAULT_SKIN), SKINS.length, DEFAULT_SKIN);
         snapshot.hangulLayoutIndex = bounded(prefs.getInt(KEY_HANGUL_TYPE, HANGUL_LAYOUT_YUN),
@@ -100,11 +115,18 @@ public class SettingsStore {
         snapshot.customStrokeLength = true;
         int defaultShortStroke = defaultShortStrokeMmTenths(snapshot.strokeLengthIndex);
         int defaultLongStroke = defaultLongStrokeMmTenths(snapshot.strokeLengthIndex);
-        snapshot.shortStrokeMmTenths = boundedRange(prefs.getInt(KEY_STROKE_SHORT_MM_TENTHS, defaultShortStroke),
-                MIN_CUSTOM_SHORT_MM_TENTHS, MAX_CUSTOM_SHORT_MM_TENTHS, defaultShortStroke);
-        snapshot.longStrokeMmTenths = boundedRange(prefs.getInt(KEY_STROKE_LONG_MM_TENTHS, defaultLongStroke),
-                MIN_CUSTOM_LONG_MM_TENTHS, MAX_CUSTOM_LONG_MM_TENTHS, defaultLongStroke);
+        snapshot.longStrokeMmTenths = boundedCustomLongStrokeMmTenths(
+                prefs.getInt(KEY_STROKE_LONG_MM_TENTHS, defaultLongStroke),
+                defaultLongStroke);
+        snapshot.shortStrokeMmTenths = boundedCustomShortStrokeMmTenths(
+                prefs.getInt(KEY_STROKE_SHORT_MM_TENTHS, defaultShortStroke),
+                snapshot.longStrokeMmTenths,
+                defaultShortStroke);
         snapshot.doubleTapTimeIndex = bounded(prefs.getInt(KEY_DOUBLE_TAP_TIME, DEFAULT_DOUBLE_TAP_TIME), DOUBLE_TAP_TIMES.length, DEFAULT_DOUBLE_TAP_TIME);
+        snapshot.deleteRepeatStartMs = boundedDeleteRepeatStartMs(
+                prefs.getInt(KEY_DELETE_REPEAT_START_MS, DEFAULT_DELETE_REPEAT_START_MS));
+        snapshot.deleteRepeatIntervalMs = boundedDeleteRepeatIntervalMs(
+                prefs.getInt(KEY_DELETE_REPEAT_INTERVAL_MS, DEFAULT_DELETE_REPEAT_INTERVAL_MS));
         snapshot.vibrateOn = prefs.getBoolean(KEY_VIBRATE_ON, true);
         snapshot.vibrateLevelIndex = bounded(prefs.getInt(KEY_VIBRATE_LEVEL, DEFAULT_VIBRATE_LEVEL), VIBRATE_LEVELS.length, DEFAULT_VIBRATE_LEVEL);
         snapshot.soundOn = prefs.getBoolean(KEY_SOUND_ON, false);
@@ -119,7 +141,39 @@ public class SettingsStore {
     }
 
     public static void putInt(Context context, String key, int value) {
-        prefs(context).edit().putInt(key, value).apply();
+        SharedPreferences prefs = prefs(context);
+        ensureStrokeMmScaleVersion(prefs);
+        if (KEY_STROKE_SHORT_MM_TENTHS.equals(key) || KEY_STROKE_LONG_MM_TENTHS.equals(key)) {
+            int strokeIndex = bounded(prefs.getInt(KEY_STROKE_LENGTH, DEFAULT_STROKE_LENGTH),
+                    STROKE_LENGTHS.length, DEFAULT_STROKE_LENGTH);
+            int defaultShortStroke = defaultShortStrokeMmTenths(strokeIndex);
+            int defaultLongStroke = defaultLongStrokeMmTenths(strokeIndex);
+            int longStroke = KEY_STROKE_LONG_MM_TENTHS.equals(key)
+                    ? boundedCustomLongStrokeMmTenths(value, defaultLongStroke)
+                    : boundedCustomLongStrokeMmTenths(
+                            prefs.getInt(KEY_STROKE_LONG_MM_TENTHS, defaultLongStroke),
+                            defaultLongStroke);
+            int shortStroke = KEY_STROKE_SHORT_MM_TENTHS.equals(key)
+                    ? boundedCustomShortStrokeMmTenths(value, longStroke, defaultShortStroke)
+                    : boundedCustomShortStrokeMmTenths(
+                            prefs.getInt(KEY_STROKE_SHORT_MM_TENTHS, defaultShortStroke),
+                            longStroke,
+                            defaultShortStroke);
+            prefs.edit()
+                    .putInt(KEY_STROKE_LONG_MM_TENTHS, longStroke)
+                    .putInt(KEY_STROKE_SHORT_MM_TENTHS, shortStroke)
+                    .apply();
+            return;
+        }
+        if (KEY_DELETE_REPEAT_START_MS.equals(key)) {
+            prefs.edit().putInt(key, boundedDeleteRepeatStartMs(value)).apply();
+            return;
+        }
+        if (KEY_DELETE_REPEAT_INTERVAL_MS.equals(key)) {
+            prefs.edit().putInt(key, boundedDeleteRepeatIntervalMs(value)).apply();
+            return;
+        }
+        prefs.edit().putInt(key, value).apply();
     }
 
     public static void putBoolean(Context context, String key, boolean value) {
@@ -128,6 +182,24 @@ public class SettingsStore {
 
     public static void putString(Context context, String key, String value) {
         prefs(context).edit().putString(key, value == null ? "" : value).apply();
+    }
+
+    private static void ensureStrokeMmScaleVersion(SharedPreferences prefs) {
+        if (prefs.getInt(KEY_STROKE_MM_SCALE_VERSION, 1) >= STROKE_MM_SCALE_VERSION) {
+            return;
+        }
+        SharedPreferences.Editor editor = prefs.edit();
+        migrateLegacyStrokeMmValue(prefs, editor, KEY_STROKE_SHORT_MM_TENTHS);
+        migrateLegacyStrokeMmValue(prefs, editor, KEY_STROKE_LONG_MM_TENTHS);
+        editor.putInt(KEY_STROKE_MM_SCALE_VERSION, STROKE_MM_SCALE_VERSION).apply();
+    }
+
+    private static void migrateLegacyStrokeMmValue(SharedPreferences prefs, SharedPreferences.Editor editor,
+                                                   String key) {
+        if (!prefs.contains(key)) {
+            return;
+        }
+        editor.putInt(key, prefs.getInt(key, 0) * LEGACY_STROKE_MM_SCALE_MULTIPLIER);
     }
 
     public static void clearGestureCalibration(Context context) {
@@ -243,11 +315,59 @@ public class SettingsStore {
     }
 
     public static int boundedCustomShortStrokeMmTenths(int value, int fallback) {
-        return boundedRange(value, MIN_CUSTOM_SHORT_MM_TENTHS, MAX_CUSTOM_SHORT_MM_TENTHS, fallback);
+        return boundedStrokeRange(value, MIN_CUSTOM_SHORT_MM_TENTHS, MAX_CUSTOM_SHORT_MM_TENTHS,
+                clamped(fallback, MIN_CUSTOM_SHORT_MM_TENTHS, MAX_CUSTOM_SHORT_MM_TENTHS));
+    }
+
+    public static int boundedCustomShortStrokeMmTenths(int value, int longStrokeMmTenths, int fallback) {
+        int max = maxCustomShortStrokeMmTenths(longStrokeMmTenths);
+        int safeFallback = boundedStrokeRange(fallback, MIN_CUSTOM_SHORT_MM_TENTHS, max,
+                Math.min(Math.max(fallback, MIN_CUSTOM_SHORT_MM_TENTHS), max));
+        return boundedStrokeRange(value, MIN_CUSTOM_SHORT_MM_TENTHS, max, safeFallback);
     }
 
     public static int boundedCustomLongStrokeMmTenths(int value, int fallback) {
-        return boundedRange(value, MIN_CUSTOM_LONG_MM_TENTHS, MAX_CUSTOM_LONG_MM_TENTHS, fallback);
+        return boundedStrokeRange(value, MIN_CUSTOM_LONG_MM_TENTHS, MAX_CUSTOM_LONG_MM_TENTHS,
+                clamped(fallback, MIN_CUSTOM_LONG_MM_TENTHS, MAX_CUSTOM_LONG_MM_TENTHS));
+    }
+
+    public static int maxCustomShortStrokeMmTenths(int longStrokeMmTenths) {
+        int maxByGap = longStrokeMmTenths - MIN_CUSTOM_STROKE_GAP_MM_TENTHS;
+        return Math.max(MIN_CUSTOM_SHORT_MM_TENTHS, Math.min(MAX_CUSTOM_SHORT_MM_TENTHS, maxByGap));
+    }
+
+    private static int clamped(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
+    }
+
+    private static int boundedStrokeRange(int value, int min, int max, int fallback) {
+        int safeFallback = clamped(snappedStrokeMmHundredths(fallback), min, max);
+        int snappedValue = snappedStrokeMmHundredths(value);
+        return snappedValue >= min && snappedValue <= max ? snappedValue : safeFallback;
+    }
+
+    private static int snappedStrokeMmHundredths(int value) {
+        return Math.round(value / (float) CUSTOM_STROKE_STEP_TENTHS) * CUSTOM_STROKE_STEP_TENTHS;
+    }
+
+    public static int boundedDeleteRepeatStartMs(int value) {
+        return boundedRepeatMs(value, MIN_DELETE_REPEAT_START_MS, MAX_DELETE_REPEAT_START_MS,
+                DELETE_REPEAT_START_STEP_MS, DEFAULT_DELETE_REPEAT_START_MS);
+    }
+
+    public static int boundedDeleteRepeatIntervalMs(int value) {
+        return boundedRepeatMs(value, MIN_DELETE_REPEAT_INTERVAL_MS, MAX_DELETE_REPEAT_INTERVAL_MS,
+                DELETE_REPEAT_INTERVAL_STEP_MS, DEFAULT_DELETE_REPEAT_INTERVAL_MS);
+    }
+
+    private static int boundedRepeatMs(int value, int min, int max, int step, int fallback) {
+        int safeFallback = clamped(snappedRepeatMs(fallback, min, step), min, max);
+        int snappedValue = clamped(snappedRepeatMs(value, min, step), min, max);
+        return value >= min && value <= max ? snappedValue : safeFallback;
+    }
+
+    private static int snappedRepeatMs(int value, int min, int step) {
+        return min + Math.round((value - min) / (float) step) * step;
     }
 
     public static int boundedKeyboardWidthPercent(int value) {
@@ -336,11 +456,16 @@ public class SettingsStore {
                 snapshot.keyboardLayoutLeftPercent);
     }
 
-    public static String strokeMmLabel(int tenths) {
-        if (tenths % 10 == 0) {
-            return (tenths / 10) + "mm";
+    public static String strokeMmLabel(int hundredths) {
+        if (hundredths % 100 == 0) {
+            return (hundredths / 100) + "mm";
         }
-        return (tenths / 10) + "." + Math.abs(tenths % 10) + "mm";
+        int whole = hundredths / 100;
+        int fraction = Math.abs(hundredths % 100);
+        if (fraction % 10 == 0) {
+            return whole + "." + (fraction / 10) + "mm";
+        }
+        return whole + "." + (fraction < 10 ? "0" : "") + fraction + "mm";
     }
 
     private static boolean isLandscape(Context context) {
@@ -387,6 +512,8 @@ public class SettingsStore {
         public int shortStrokeMmTenths;
         public int longStrokeMmTenths;
         public int doubleTapTimeIndex;
+        public int deleteRepeatStartMs;
+        public int deleteRepeatIntervalMs;
         public boolean vibrateOn;
         public int vibrateLevelIndex;
         public boolean soundOn;
@@ -417,12 +544,20 @@ public class SettingsStore {
             return values[bounded(doubleTapTimeIndex, values.length, DEFAULT_DOUBLE_TAP_TIME)];
         }
 
+        public int deleteRepeatStartMs() {
+            return boundedDeleteRepeatStartMs(deleteRepeatStartMs);
+        }
+
+        public int deleteRepeatIntervalMs() {
+            return boundedDeleteRepeatIntervalMs(deleteRepeatIntervalMs);
+        }
+
         public float shortStrokeMm() {
-            return shortStrokeMmTenths / 10f;
+            return shortStrokeMmTenths / 100f;
         }
 
         public float longStrokeMm() {
-            return longStrokeMmTenths / 10f;
+            return longStrokeMmTenths / 100f;
         }
 
         public float keyboardLeftInsetScale() {
