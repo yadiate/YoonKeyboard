@@ -329,10 +329,20 @@ public class EightWayInputMethodService extends InputMethodService
 
     private boolean replaceRecentConsonantWithDouble(Consonant consonant, long now) {
         Consonant replacement = consonant == null ? null : consonant.doubleTapVariant();
-        return replacement != null
-                && lastConsonantTap == consonant
-                && now - lastConsonantTapTimeMs <= doubleConsonantTimeoutMs()
-                && composer.replaceSingleConsonant(consonant, replacement);
+        if (replacement == null
+                || lastConsonantTap != consonant
+                || now - lastConsonantTapTimeMs > doubleConsonantTimeoutMs()) {
+            return false;
+        }
+        if (composer.replaceSingleConsonant(consonant, replacement)) {
+            return true;
+        }
+        String committed = composer.promoteCombinedFinalToDoubleInitial(consonant, replacement);
+        if (committed == null) {
+            return false;
+        }
+        commitTextIfNeeded(committed);
+        return true;
     }
 
     private int doubleConsonantTimeoutMs() {

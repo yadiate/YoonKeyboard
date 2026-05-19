@@ -177,6 +177,23 @@ public class HangulComposer {
         return false;
     }
 
+    public String promoteCombinedFinalToDoubleInitial(Consonant base, Consonant replacement) {
+        if (base == null || replacement == null || lead < 0 || vowel < 0 || tail <= 0) {
+            return null;
+        }
+        FinalSplit split = FINAL_SPLITS.get(tail);
+        if (split == null || split.nextLeading != base) {
+            return null;
+        }
+        int previousLead = lead;
+        int previousVowel = vowel;
+        int previousTail = split.remainingFinal;
+        lead = replacement.leadingIndex();
+        vowel = -1;
+        tail = 0;
+        return compose(previousLead, previousVowel, previousTail);
+    }
+
     public boolean hasComposingText() {
         return lead >= 0 || vowel >= 0 || tail > 0;
     }
