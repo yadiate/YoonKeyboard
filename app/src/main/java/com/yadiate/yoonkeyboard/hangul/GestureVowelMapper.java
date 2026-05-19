@@ -18,6 +18,14 @@ public class GestureVowelMapper {
     private static final float CLEAR_CORNER_MIN_FIRST_STROKE_RATIO = 0.78f;
     private static final float CLEAR_CORNER_MIN_PATH_RATIO = 1.14f;
     private static final float CLEAR_CORNER_MIN_ANGLE_CHANGE_DEGREES = 12f;
+    private static final float MIN_LONG_GESTURE_MM = 5f;
+    private static final float MIN_SHORT_LONG_GAP_MM = 1f;
+    private static final float LONG_CARDINAL_AXIS_WEIGHT = 0.62f;
+    private static final float LONG_CARDINAL_LENGTH_BONUS = 0.42f;
+    private static final float LONG_CARDINAL_LENGTH_MARGIN_WEIGHT = 0.18f;
+    private static final float DIAGONAL_SCORE_WEIGHT = 0.90f;
+    private static final float DIAGONAL_DIRECTION_BONUS = 0.10f;
+    private static final float LONG_CARDINAL_WIN_MARGIN = 0.03f;
 
     private float xPixelsPerMm = 1f;
     private float yPixelsPerMm = 1f;
@@ -38,8 +46,9 @@ public class GestureVowelMapper {
     }
 
     public void setStrokeLengths(float minSegmentMm, float longGestureMm) {
-        this.minSegmentMm = Math.max(0.5f, minSegmentMm);
-        this.longGestureMm = Math.max(this.minSegmentMm + 1f, longGestureMm);
+        this.longGestureMm = Math.max(MIN_LONG_GESTURE_MM, longGestureMm);
+        this.minSegmentMm = Math.max(0.5f,
+                Math.min(minSegmentMm, this.longGestureMm - MIN_SHORT_LONG_GAP_MM));
     }
 
     public void setCalibrationProfile(GestureCalibration.Profile calibrationProfile) {
@@ -103,6 +112,11 @@ public class GestureVowelMapper {
 
         boolean longFirst = isLongGesture(firstDirection, firstDirectionDistance, consonant);
         float pathRatio = coarsePathDistanceMm(points) / Math.max(totalDistance, 0.001f);
+        Integer longCardinal = mapScoredLongCardinalCandidate(overallDx, overallDy, totalDistance, pathRatio,
+                firstDirection, firstDirectionAngle, firstDirectionDistance, directions, overallAngle, consonant);
+        if (longCardinal != null) {
+            return longCardinal;
+        }
         Integer smoothDiagonal = mapSmoothDiagonalTrace(overallDx, overallDy, totalDistance, pathRatio,
                 firstDirection, firstDirectionAngle, firstDirectionDistance, directions, longSingle, consonant);
         if (smoothDiagonal != null) {
@@ -121,6 +135,35 @@ public class GestureVowelMapper {
             return mapSingleDirection(firstDirection, longFirst);
         }
         return overall;
+    }
+
+    private Integer mapScoredLongCardinalCandidate(float dx, float dy, float totalDistanceMm, float pathRatio,
+                                                   Direction firstDirection, float firstDirectionAngle,
+                                                   float firstDirectionDistance, List<Direction> directions,
+                                                   float overallAngle, Consonant consonant) {
+        Direction longDirection = dominantCardinalAxisDirection(dx, dy);
+        float longThreshold = longGestureThreshold(longDirection, consonant);
+        if (totalDistanceMm <= longThreshold) {
+            return null;
+        }
+        if (pathRatio > SMOOTH_DIAGONAL_MAX_PATH_RATIO) {
+            return null;
+        }
+        if (isCardinal(firstDirection) && !Float.isNaN(firstDirectionAngle)) {
+            float angleChange = Math.abs(GestureCalibration.angleDiff(firstDirectionAngle, overallAngle));
+            if (hasClearCorner(firstDirection, firstDirectionDistance, directions, angleChange, pathRatio)) {
+                return null;
+            }
+        }
+
+        float lengthMargin = clamp((totalDistanceMm - longThreshold) / Math.max(1f, longThreshold), 0f, 1f);
+        float longScore = axisConfidence(dx, dy) * LONG_CARDINAL_AXIS_WEIGHT
+                + LONG_CARDINAL_LENGTH_BONUS
+                + lengthMargin * LONG_CARDINAL_LENGTH_MARGIN_WEIGHT;
+        float diagonalScore = diagonalScore(overallAngle, directionFor(dx, dy, consonant));
+        return longScore > diagonalScore + LONG_CARDINAL_WIN_MARGIN
+                ? mapSingleDirection(longDirection, true)
+                : null;
     }
 
     public Trace trace(List<Point> points) {
@@ -402,18 +445,19 @@ public class GestureVowelMapper {
     }
 
     private boolean isLongGesture(Direction direction, float distanceMm, Consonant consonant) {
-        if (direction == null) {
-            return distanceMm > longGestureMm;
-        }
+        return distanceMm > longGestureThreshold(direction, consonant);
+    }
+
+    private float longGestureThreshold(Direction direction, Consonant consonant) {
         if (calibrationProfile != null) {
             if (direction == Direction.RIGHT || direction == Direction.LEFT) {
-                return distanceMm > calibrationProfile.longHorizontalMm(consonant, longGestureMm);
+                return calibrationProfile.longHorizontalMm(consonant, longGestureMm);
             }
             if (direction == Direction.UP || direction == Direction.DOWN) {
-                return distanceMm > calibrationProfile.longVerticalMm(consonant, longGestureMm);
+                return calibrationProfile.longVerticalMm(consonant, longGestureMm);
             }
         }
-        return distanceMm > longGestureMm;
+        return longGestureMm;
     }
 
     private Direction directionFor(float dx, float dy) {
@@ -452,6 +496,39 @@ public class GestureVowelMapper {
             return Direction.DOWN_LEFT;
         }
         return Direction.UP_LEFT;
+    }
+
+    private Direction dominantCardinalAxisDirection(float dx, float dy) {
+        if (Math.abs(dx) >= Math.abs(dy)) {
+            return dx >= 0 ? Direction.RIGHT : Direction.LEFT;
+        }
+        return dy >= 0 ? Direction.DOWN : Direction.UP;
+    }
+
+    private float axisConfidence(float dx, float dy) {
+        float major = Math.max(Math.abs(dx), Math.abs(dy));
+        if (major <= 0f) {
+            return 0f;
+        }
+        float minor = Math.min(Math.abs(dx), Math.abs(dy));
+        return clamp((major - minor) / major, 0f, 1f);
+    }
+
+    private float diagonalScore(float angle, Direction mappedDirection) {
+        float bestCloseness = 0f;
+        for (GestureCalibration.DirectionClass directionClass : diagonalClasses()) {
+            Direction direction = directionForClass(directionClass);
+            float diff = Math.abs(GestureCalibration.angleDiff(angle, referenceCenterAngle(direction)));
+            float closeness = 1f - Math.min(diff, REFERENCE_VOWEL_TOLERANCE_DEGREES)
+                    / REFERENCE_VOWEL_TOLERANCE_DEGREES;
+            bestCloseness = Math.max(bestCloseness, closeness);
+        }
+        float bonus = isCardinal(mappedDirection) ? 0f : DIAGONAL_DIRECTION_BONUS;
+        return bestCloseness * DIAGONAL_SCORE_WEIGHT + bonus;
+    }
+
+    private float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(value, max));
     }
 
     private Direction calibratedDiagonalDirection(float angle, float distanceMm, Consonant consonant) {
