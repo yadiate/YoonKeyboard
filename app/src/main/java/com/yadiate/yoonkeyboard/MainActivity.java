@@ -406,6 +406,18 @@ public class MainActivity extends Activity {
         angleParams.setMargins(0, dp(2), 0, dp(10));
         root.addView(angleView, angleParams);
 
+        LinearLayout defaultRow = new LinearLayout(this);
+        defaultRow.setOrientation(LinearLayout.HORIZONTAL);
+        defaultRow.setGravity(Gravity.CENTER);
+        addCalibrationActionButton(defaultRow, "개별 미설정 기본값", true, false, () -> {
+            angleView.setSelectedConsonant(null);
+            keyboardPickerView.setSelection(null, angleView.selectedDirection);
+        });
+        LinearLayout.LayoutParams defaultParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        defaultParams.setMargins(0, 0, 0, dp(8));
+        root.addView(defaultRow, defaultParams);
+
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.setGravity(Gravity.CENTER);
@@ -1390,6 +1402,7 @@ public class MainActivity extends Activity {
         private final Paint anglePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF cardRect = new RectF();
         private final RectF circleBounds = new RectF();
+        private final RectF rangeSliderRect = new RectF();
         private final Path handlePath = new Path();
         private final ManualAngleChangeListener angleChangeListener;
         private final float fallbackShortMm;
@@ -1402,6 +1415,7 @@ public class MainActivity extends Activity {
         private float centerY;
         private float radius;
         private boolean draggingHandle;
+        private boolean draggingRange;
 
         CalibrationAngleEditorView(Context context, GestureCalibration.Profile profile, Consonant selectedConsonant,
                                    float fallbackShortMm, float fallbackLongMm,
@@ -1427,9 +1441,6 @@ public class MainActivity extends Activity {
         }
 
         void setSelectedConsonant(Consonant consonant) {
-            if (consonant == null) {
-                return;
-            }
             selectedConsonant = consonant;
             if (keyboardPickerView != null) {
                 keyboardPickerView.setSelection(selectedConsonant, selectedDirection);
@@ -1462,12 +1473,18 @@ public class MainActivity extends Activity {
             drawAngleHeader(canvas);
             drawAngleCircle(canvas);
             drawDirectionLines(canvas);
+            drawRangeSlider(canvas);
         }
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    if (rangeSliderRect.contains(event.getX(), event.getY())) {
+                        draggingRange = true;
+                        updateToleranceFromTouch(event.getX());
+                        return true;
+                    }
                     GestureCalibration.DirectionClass hitDirection = hitDirection(event.getX(), event.getY());
                     if (hitDirection != null) {
                         selectedDirection = hitDirection;
@@ -1477,6 +1494,10 @@ public class MainActivity extends Activity {
                     }
                     return true;
                 case MotionEvent.ACTION_MOVE:
+                    if (draggingRange) {
+                        updateToleranceFromTouch(event.getX());
+                        return true;
+                    }
                     if (draggingHandle) {
                         updateAngleFromTouch(event.getX(), event.getY());
                         return true;
@@ -1485,6 +1506,7 @@ public class MainActivity extends Activity {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     draggingHandle = false;
+                    draggingRange = false;
                     return true;
                 default:
                     return super.onTouchEvent(event);
@@ -1498,7 +1520,8 @@ public class MainActivity extends Activity {
             anglePaint.setTypeface(Typeface.DEFAULT_BOLD);
             anglePaint.setTextSize(dp(18));
             anglePaint.setColor(TEXT_PRIMARY);
-            canvas.drawText(selectedConsonant.label() + " 키", dp(20), dp(32), anglePaint);
+            String targetLabel = selectedConsonant == null ? "기본값" : selectedConsonant.label() + " 키";
+            canvas.drawText(targetLabel, dp(20), dp(32), anglePaint);
 
             anglePaint.setTypeface(Typeface.DEFAULT);
             anglePaint.setTextSize(dp(13));
@@ -1512,6 +1535,14 @@ public class MainActivity extends Activity {
             anglePaint.setStyle(Paint.Style.FILL);
             anglePaint.setColor(Color.rgb(246, 248, 251));
             canvas.drawCircle(centerX, centerY, radius, anglePaint);
+
+            float selectedAngle = angleFor(selectedDirection);
+            float selectedTolerance = toleranceFor(selectedDirection);
+            RectF toleranceArc = new RectF(centerX - radius * 0.96f, centerY - radius * 0.96f,
+                    centerX + radius * 0.96f, centerY + radius * 0.96f);
+            anglePaint.setColor(Color.argb(34, 32, 118, 255));
+            canvas.drawArc(toleranceArc, selectedAngle - selectedTolerance,
+                    selectedTolerance * 2f, true, anglePaint);
 
             anglePaint.setStyle(Paint.Style.STROKE);
             anglePaint.setStrokeWidth(dp(1));
@@ -1559,6 +1590,45 @@ public class MainActivity extends Activity {
                         pointX(angle, radius * 1.34f), pointY(angle, radius * 1.34f));
                 anglePaint.setTypeface(Typeface.DEFAULT);
             }
+        }
+
+        private void drawRangeSlider(Canvas canvas) {
+            float left = dp(24);
+            float right = getWidth() - dp(24);
+            float centerY = getHeight() - dp(34);
+            rangeSliderRect.set(left, centerY - dp(24), right, centerY + dp(24));
+            float trackY = centerY + dp(8);
+            float tolerance = toleranceFor(selectedDirection);
+            float progress = (tolerance - GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES)
+                    / (GestureCalibration.MAX_DIAGONAL_TOLERANCE_DEGREES
+                    - GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES);
+            progress = Math.max(0f, Math.min(1f, progress));
+            float handleX = left + (right - left) * progress;
+
+            anglePaint.setShader(null);
+            anglePaint.setStyle(Paint.Style.FILL);
+            anglePaint.setTextAlign(Paint.Align.LEFT);
+            anglePaint.setTypeface(Typeface.DEFAULT_BOLD);
+            anglePaint.setTextSize(dp(12));
+            anglePaint.setColor(TEXT_PRIMARY);
+            canvas.drawText("Range +/-" + Math.round(tolerance) + " deg", left, centerY - dp(10), anglePaint);
+
+            anglePaint.setStyle(Paint.Style.STROKE);
+            anglePaint.setStrokeWidth(dp(5));
+            anglePaint.setStrokeCap(Paint.Cap.ROUND);
+            anglePaint.setColor(Color.rgb(220, 226, 234));
+            canvas.drawLine(left, trackY, right, trackY, anglePaint);
+            anglePaint.setColor(Color.rgb(32, 118, 255));
+            canvas.drawLine(left, trackY, handleX, trackY, anglePaint);
+            anglePaint.setStrokeCap(Paint.Cap.BUTT);
+
+            anglePaint.setStyle(Paint.Style.FILL);
+            anglePaint.setColor(Color.WHITE);
+            canvas.drawCircle(handleX, trackY, dp(10), anglePaint);
+            anglePaint.setStyle(Paint.Style.STROKE);
+            anglePaint.setStrokeWidth(dp(2));
+            anglePaint.setColor(Color.rgb(32, 118, 255));
+            canvas.drawCircle(handleX, trackY, dp(10), anglePaint);
         }
 
         private void drawAngleText(Canvas canvas, String text, float x, float centerY) {
@@ -1642,10 +1712,39 @@ public class MainActivity extends Activity {
             invalidate();
         }
 
+        private void updateToleranceFromTouch(float x) {
+            if (profile == null) {
+                profile = new GestureCalibration.Profile();
+            }
+            float span = Math.max(1f, rangeSliderRect.width());
+            float progress = Math.max(0f, Math.min(1f, (x - rangeSliderRect.left) / span));
+            float tolerance = GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES
+                    + (GestureCalibration.MAX_DIAGONAL_TOLERANCE_DEGREES
+                    - GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES) * progress;
+            tolerance = Math.round(tolerance);
+            profile.setDirectionTolerance(selectedConsonant, selectedDirection, tolerance,
+                    fallbackShortMm, fallbackLongMm);
+            if (keyboardPickerView != null) {
+                keyboardPickerView.setProfile(profile);
+                keyboardPickerView.setSelection(selectedConsonant, selectedDirection);
+                keyboardPickerView.invalidate();
+            }
+            invalidate();
+        }
+
         private float angleFor(GestureCalibration.DirectionClass directionClass) {
             GestureCalibration.DirectionProfile directionProfile =
                     profile == null ? null : profile.directionProfile(selectedConsonant, directionClass);
             return directionProfile == null ? defaultAngleFor(directionClass) : directionProfile.centerAngle;
+        }
+
+        private float toleranceFor(GestureCalibration.DirectionClass directionClass) {
+            GestureCalibration.DirectionProfile directionProfile =
+                    profile == null ? null : profile.directionProfile(selectedConsonant, directionClass);
+            return directionProfile == null
+                    ? GestureCalibration.DEFAULT_DIAGONAL_TOLERANCE_DEGREES
+                    : Math.max(GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES,
+                    Math.min(GestureCalibration.MAX_DIAGONAL_TOLERANCE_DEGREES, directionProfile.tolerance));
         }
 
         private float pointX(float angleDegrees, float pointRadius) {
@@ -2080,15 +2179,10 @@ public class MainActivity extends Activity {
             previewPaint.setColor(theme.background);
             canvas.drawRoundRect(keyboardRect, dp(2), dp(2), previewPaint);
 
-            float toolbarHeight = Math.min(dp(52), keyboardRect.height() * 0.2f);
-            RectF toolbarRect = new RectF(keyboardRect.left, keyboardRect.top, keyboardRect.right,
-                    keyboardRect.top + toolbarHeight);
-            drawPreviewToolbar(canvas, toolbarRect, theme);
-
             float gap = dp(4);
             float leftLineX = layoutLineX(layoutLeftPercent);
             float rightLineX = layoutLineX(layoutRightPercent);
-            float rowsTop = toolbarRect.bottom + gap;
+            float rowsTop = keyboardRect.top + gap;
             float rowHeight = (keyboardRect.bottom - rowsTop - gap * 4f) / 4f;
             if (rowHeight <= dp(8)) {
                 return;
@@ -2100,30 +2194,6 @@ public class MainActivity extends Activity {
                     Math.max(dp(60), rightLineX - leftLineX - gap * 2f), rowHeight, gap, theme);
             drawPreviewRightColumn(canvas, rightLineX + gap, rowsTop,
                     Math.max(dp(30), keyboardRect.right - rightLineX - gap * 2f), rowHeight, gap, theme);
-        }
-
-        private void drawPreviewToolbar(Canvas canvas, RectF rect, SettingsStore.KeyboardTheme theme) {
-            previewPaint.setStyle(Paint.Style.FILL);
-            previewPaint.setColor(theme.background);
-            canvas.drawRect(rect, previewPaint);
-            String[] labels = {"☺", "GIF", "▣", "⚙", "⋮"};
-            float[] weights = {1.1f, 1.5f, 1.1f, 1.1f, 1.0f};
-            float total = 0f;
-            for (float weight : weights) {
-                total += weight;
-            }
-            float x = rect.left;
-            previewPaint.setTextAlign(Paint.Align.CENTER);
-            previewPaint.setStyle(Paint.Style.FILL);
-            for (int i = 0; i < labels.length; i++) {
-                float width = rect.width() * weights[i] / total;
-                previewPaint.setTextSize(dp(i == 1 ? 16 : 24));
-                previewPaint.setFakeBoldText(i == 4);
-                previewPaint.setColor(i == 0 ? Color.rgb(232, 174, 30) : theme.hint);
-                drawPreviewText(canvas, labels[i], x + width / 2f, rect.centerY());
-                x += width;
-            }
-            previewPaint.setFakeBoldText(false);
         }
 
         private void drawPreviewSideColumn(Canvas canvas, float left, float top, float width, float rowHeight,

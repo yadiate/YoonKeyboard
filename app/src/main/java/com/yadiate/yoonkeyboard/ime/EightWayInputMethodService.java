@@ -44,6 +44,7 @@ public class EightWayInputMethodService extends InputMethodService
     private int currentEditorActionId;
     private Consonant lastConsonantTap;
     private long lastConsonantTapTimeMs;
+    private boolean immediateConsonantPlaceholderVisible;
 
     @Override
     public View onCreateInputView() {
@@ -70,6 +71,7 @@ public class EightWayInputMethodService extends InputMethodService
             keyboardView.setSettings(settings);
         }
         composer.reset();
+        immediateConsonantPlaceholderVisible = false;
         resetDoubleConsonantTapState();
     }
 
@@ -214,15 +216,40 @@ public class EightWayInputMethodService extends InputMethodService
     }
 
     @Override
-    public void onGesture(KeySpec key, Integer vowelIndex, boolean playCommitHaptic) {
+    public void onKeyTouchDown(KeySpec key) {
+        if (key == null) {
+            return;
+        }
         playKeySound();
-        if (playCommitHaptic) {
-            vibrate();
+        vibrate();
+        switch (key.type) {
+            case HANGUL_CONSONANT:
+                handleHangulConsonantTouchDown(key.consonant);
+                break;
+            case DELETE:
+                resetDoubleConsonantTapState();
+                handleBackspace();
+                break;
+            default:
+                break;
+        }
+    }
+
+    @Override
+    public void onGesture(KeySpec key, Integer vowelIndex, boolean playCommitHaptic, boolean keyHandledOnTouchDown) {
+        if (!keyHandledOnTouchDown) {
+            playKeySound();
+            if (playCommitHaptic) {
+                vibrate();
+            }
         }
         if (key.type == KeySpec.Type.HANGUL_CONSONANT) {
-            boolean replacedWithDouble = replaceRecentConsonantWithDouble(key.consonant, SystemClock.uptimeMillis());
-            if (!replacedWithDouble) {
-                commitTextIfNeeded(composer.inputConsonant(key.consonant));
+            if (!keyHandledOnTouchDown) {
+                boolean replacedWithDouble = replaceRecentConsonantWithDouble(key.consonant,
+                        SystemClock.uptimeMillis());
+                if (!replacedWithDouble) {
+                    commitTextIfNeeded(composer.inputConsonant(key.consonant));
+                }
             }
         }
         resetDoubleConsonantTapState();
@@ -330,32 +357,79 @@ public class EightWayInputMethodService extends InputMethodService
             refreshComposingText();
             return;
         }
+        settleImmediateConsonantPlaceholderIfStandalone();
         commitTextIfNeeded(composer.inputConsonant(consonant));
         refreshComposingText();
         lastConsonantTap = consonant;
         lastConsonantTapTimeMs = now;
     }
 
+    private void handleHangulConsonantTouchDown(Consonant consonant) {
+        long now = SystemClock.uptimeMillis();
+        if (replaceRecentConsonantWithDouble(consonant, now)) {
+            resetDoubleConsonantTapState();
+            if (composer.isLeadingOnly()) {
+                showImmediateConsonantPlaceholder();
+            } else {
+                refreshComposingText();
+            }
+            return;
+        }
+        String committedBeforeMovedFinal = composer.moveFinalToInitialForTouchedConsonant(consonant);
+        if (committedBeforeMovedFinal != null) {
+            commitTextIfNeeded(committedBeforeMovedFinal);
+            showImmediateConsonantPlaceholder();
+            lastConsonantTap = consonant;
+            lastConsonantTapTimeMs = now;
+            return;
+        }
+        settleImmediateConsonantPlaceholderIfStandalone();
+        commitTextIfNeeded(composer.inputConsonant(consonant));
+        if (composer.isLeadingOnly()) {
+            showImmediateConsonantPlaceholder();
+        } else {
+            refreshComposingText();
+        }
+        lastConsonantTap = consonant;
+        lastConsonantTapTimeMs = now;
+    }
+
     private boolean replaceRecentConsonantWithDouble(Consonant consonant, long now) {
         Consonant replacement = consonant == null ? null : consonant.doubleTapVariant();
-        if (replacement == null
-                || lastConsonantTap != consonant
-                || now - lastConsonantTapTimeMs > doubleConsonantTimeoutMs()) {
+        if (replacement == null) {
+            return false;
+        }
+        if (composer.canPromoteCombinedFinalToDoubleInitial(consonant)) {
+            String committed = composer.promoteFinalToDoubleInitial(consonant, replacement);
+            if (committed != null) {
+                commitTextIfNeeded(committed);
+                return true;
+            }
+        }
+        if (lastConsonantTap != consonant
+                || now - lastConsonantTapTimeMs > doubleConsonantRecoveryTimeoutMs()) {
+            return false;
+        }
+        String committed = composer.promoteFinalToDoubleInitial(consonant, replacement);
+        if (committed != null) {
+            commitTextIfNeeded(committed);
+            return true;
+        }
+        if (now - lastConsonantTapTimeMs > doubleConsonantTimeoutMs()) {
             return false;
         }
         if (composer.replaceSingleConsonant(consonant, replacement)) {
             return true;
         }
-        String committed = composer.promoteCombinedFinalToDoubleInitial(consonant, replacement);
-        if (committed == null) {
-            return false;
-        }
-        commitTextIfNeeded(committed);
-        return true;
+        return false;
     }
 
     private int doubleConsonantTimeoutMs() {
         return settings == null ? 380 : settings.doubleConsonantTimeoutMs();
+    }
+
+    private int doubleConsonantRecoveryTimeoutMs() {
+        return Math.min(760, doubleConsonantTimeoutMs() + 220);
     }
 
     private void resetDoubleConsonantTapState() {
@@ -364,6 +438,16 @@ public class EightWayInputMethodService extends InputMethodService
     }
 
     private void handleBackspace() {
+        if (immediateConsonantPlaceholderVisible) {
+            InputConnection inputConnection = getCurrentInputConnection();
+            if (inputConnection != null) {
+                inputConnection.setComposingText("", 1);
+                inputConnection.finishComposingText();
+            }
+            immediateConsonantPlaceholderVisible = false;
+            composer.reset();
+            return;
+        }
         if (composer.backspace()) {
             refreshComposingTextAfterBackspace();
             return;
@@ -381,8 +465,10 @@ public class EightWayInputMethodService extends InputMethodService
         }
         if (composer.hasComposingText()) {
             inputConnection.setComposingText(composer.getComposingText(), 1);
+            immediateConsonantPlaceholderVisible = composer.isLeadingOnly();
         } else {
             inputConnection.finishComposingText();
+            immediateConsonantPlaceholderVisible = false;
         }
     }
 
@@ -393,14 +479,47 @@ public class EightWayInputMethodService extends InputMethodService
         }
         if (composer.hasComposingText()) {
             inputConnection.setComposingText(composer.getComposingText(), 1);
+            immediateConsonantPlaceholderVisible = composer.isLeadingOnly();
             return;
         }
         inputConnection.setComposingText("", 1);
         inputConnection.finishComposingText();
+        immediateConsonantPlaceholderVisible = false;
     }
 
     private void commitComposingText() {
+        if (immediateConsonantPlaceholderVisible && composer.isLeadingOnly()) {
+            InputConnection inputConnection = getCurrentInputConnection();
+            if (inputConnection != null) {
+                inputConnection.finishComposingText();
+            }
+            immediateConsonantPlaceholderVisible = false;
+            composer.reset();
+            return;
+        }
         commitTextIfNeeded(composer.commit());
+    }
+
+    private void showImmediateConsonantPlaceholder() {
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection == null || !composer.isLeadingOnly()) {
+            refreshComposingText();
+            return;
+        }
+        inputConnection.setComposingText(composer.getComposingText(), 1);
+        immediateConsonantPlaceholderVisible = true;
+    }
+
+    private void settleImmediateConsonantPlaceholderIfStandalone() {
+        if (!immediateConsonantPlaceholderVisible || !composer.isLeadingOnly()) {
+            return;
+        }
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection != null) {
+            inputConnection.finishComposingText();
+        }
+        immediateConsonantPlaceholderVisible = false;
+        composer.reset();
     }
 
     private void commitTextIfNeeded(String text) {

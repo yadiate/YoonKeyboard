@@ -16,6 +16,9 @@ public class GestureCalibration {
     private static final int MIN_DIRECTION_SAMPLES = 2;
     private static final int MIN_LONG_SAMPLES = 2;
     private static final int MIN_TOUCH_SAMPLES = 3;
+    public static final float DEFAULT_DIAGONAL_TOLERANCE_DEGREES = 32f;
+    public static final float MIN_DIAGONAL_TOLERANCE_DEGREES = 18f;
+    public static final float MAX_DIAGONAL_TOLERANCE_DEGREES = 45f;
 
     private GestureCalibration() {
     }
@@ -200,7 +203,8 @@ public class GestureCalibration {
             distances.add(sample.distanceMm);
         }
         float mad = median(angleDiffs);
-        float tolerance = clamp(mad * 2.4f + 10f, 18f, 34f);
+        float spread = Math.max(mad * 2.6f + 8f, percentile(angleDiffs, 0.85f) + 4f);
+        float tolerance = clamp(spread, MIN_DIAGONAL_TOLERANCE_DEGREES, MAX_DIAGONAL_TOLERANCE_DEGREES);
         float minDistance = clamp(median(distances) * 0.45f, fallbackShortMm * 0.55f, fallbackLongMm * 0.9f);
         return new DirectionProfile(center, tolerance, minDistance, samples.size());
     }
@@ -249,11 +253,26 @@ public class GestureCalibration {
         return filtered;
     }
 
-    private static boolean isDiagonal(DirectionClass directionClass) {
+    public static boolean isDiagonal(DirectionClass directionClass) {
         return directionClass == DirectionClass.TOP_RIGHT
                 || directionClass == DirectionClass.TOP_LEFT
                 || directionClass == DirectionClass.BOTTOM_RIGHT
                 || directionClass == DirectionClass.BOTTOM_LEFT;
+    }
+
+    public static float defaultAngleFor(DirectionClass directionClass) {
+        switch (directionClass) {
+            case TOP_RIGHT:
+                return -45f;
+            case TOP_LEFT:
+                return -135f;
+            case BOTTOM_RIGHT:
+                return 45f;
+            case BOTTOM_LEFT:
+                return 135f;
+            default:
+                return 0f;
+        }
     }
 
     private static float circularMean(List<Sample> samples) {
@@ -296,6 +315,22 @@ public class GestureCalibration {
             return sorted.get(middle);
         }
         return (sorted.get(middle - 1) + sorted.get(middle)) / 2f;
+    }
+
+    private static float percentile(List<Float> values, float percentile) {
+        if (values.isEmpty()) {
+            return 0f;
+        }
+        List<Float> sorted = new ArrayList<>(values);
+        sorted.sort(Float::compare);
+        float position = clamp(percentile, 0f, 1f) * (sorted.size() - 1);
+        int lower = (int) Math.floor(position);
+        int upper = (int) Math.ceil(position);
+        if (lower == upper) {
+            return sorted.get(lower);
+        }
+        float fraction = position - lower;
+        return sorted.get(lower) + (sorted.get(upper) - sorted.get(lower)) * fraction;
     }
 
     private static float clamp(float value, float min, float max) {
@@ -437,7 +472,9 @@ public class GestureCalibration {
             }
             return new DirectionProfile(
                     (float) object.optDouble("angle", 0d),
-                    (float) object.optDouble("tolerance", 0d),
+                    clamp((float) object.optDouble("tolerance", DEFAULT_DIAGONAL_TOLERANCE_DEGREES),
+                            MIN_DIAGONAL_TOLERANCE_DEGREES,
+                            MAX_DIAGONAL_TOLERANCE_DEGREES),
                     (float) object.optDouble("minDistance", 0d),
                     object.optInt("samples", 0));
         }
@@ -561,29 +598,78 @@ public class GestureCalibration {
         }
 
         public int consonantSamples(Consonant consonant) {
+            if (consonant == null) {
+                return global == null ? 0 : global.totalSamples();
+            }
             ConsonantProfile consonantProfile = consonant == null ? null : consonants.get(consonant.label());
             return consonantProfile == null ? 0 : consonantProfile.totalSamples();
         }
 
         public void setDirectionAngle(Consonant consonant, DirectionClass directionClass, float angleDegrees,
                                       float fallbackShortMm, float fallbackLongMm) {
-            if (consonant == null || directionClass == null || !isDiagonal(directionClass)) {
+            DirectionProfile previous = profileDirectionForEdit(consonant, directionClass);
+            float tolerance = previous == null
+                    ? DEFAULT_DIAGONAL_TOLERANCE_DEGREES
+                    : previous.tolerance;
+            setDirectionCalibration(consonant, directionClass, angleDegrees, tolerance,
+                    fallbackShortMm, fallbackLongMm);
+        }
+
+        public void setDirectionTolerance(Consonant consonant, DirectionClass directionClass,
+                                          float toleranceDegrees, float fallbackShortMm, float fallbackLongMm) {
+            DirectionProfile previous = profileDirectionForEdit(consonant, directionClass);
+            float angle = previous == null
+                    ? defaultAngleFor(directionClass)
+                    : previous.centerAngle;
+            setDirectionCalibration(consonant, directionClass, angle, toleranceDegrees,
+                    fallbackShortMm, fallbackLongMm);
+        }
+
+        public void setDirectionCalibration(Consonant consonant, DirectionClass directionClass, float angleDegrees,
+                                            float toleranceDegrees, float fallbackShortMm, float fallbackLongMm) {
+            if (directionClass == null || !isDiagonal(directionClass)) {
                 return;
             }
-            ConsonantProfile consonantProfile = consonants.get(consonant.label());
-            if (consonantProfile == null) {
-                consonantProfile = new ConsonantProfile();
-                consonants.put(consonant.label(), consonantProfile);
+            ConsonantProfile consonantProfile;
+            if (consonant == null) {
+                if (global == null) {
+                    global = new ConsonantProfile();
+                }
+                consonantProfile = global;
+            } else {
+                consonantProfile = consonants.get(consonant.label());
+                if (consonantProfile == null) {
+                    consonantProfile = new ConsonantProfile();
+                    consonants.put(consonant.label(), consonantProfile);
+                }
             }
             DirectionProfile previous = consonantProfile.directions.get(directionClass);
-            float tolerance = previous == null ? 28f : previous.tolerance;
             float minDistance = previous == null
                     ? Math.max(1f, Math.min(fallbackShortMm * 0.85f, fallbackLongMm * 0.45f))
                     : previous.minDistanceMm;
             int samples = previous == null ? MIN_DIRECTION_SAMPLES : Math.max(previous.samples, MIN_DIRECTION_SAMPLES);
             consonantProfile.directions.put(directionClass,
-                    new DirectionProfile(normalizeAngle(angleDegrees), tolerance, minDistance, samples));
+                    new DirectionProfile(normalizeAngle(angleDegrees),
+                            clamp(toleranceDegrees,
+                                    MIN_DIAGONAL_TOLERANCE_DEGREES,
+                                    MAX_DIAGONAL_TOLERANCE_DEGREES),
+                            minDistance,
+                            samples));
             consonantProfile.totalSamples = Math.max(consonantProfile.totalSamples, 1);
+        }
+
+        private DirectionProfile profileDirectionForEdit(Consonant consonant, DirectionClass directionClass) {
+            if (consonant == null) {
+                return global == null ? null : global.directions.get(directionClass);
+            }
+            ConsonantProfile consonantProfile = consonant == null ? null : consonants.get(consonant.label());
+            DirectionProfile directionProfile = consonantProfile == null
+                    ? null
+                    : consonantProfile.directions.get(directionClass);
+            if (directionProfile != null) {
+                return directionProfile;
+            }
+            return global == null ? null : global.directions.get(directionClass);
         }
 
         private boolean profileHasDirections(ConsonantProfile profile) {

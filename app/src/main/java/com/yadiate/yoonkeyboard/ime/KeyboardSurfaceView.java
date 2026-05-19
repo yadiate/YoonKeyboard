@@ -42,8 +42,6 @@ public class KeyboardSurfaceView extends View {
     private static final int LEFT_KEY_EXTRA_HIT_SLOP_DP = 5;
     private static final float LEFT_KEY_HIT_SCORE_SCALE = 0.72f;
     private static final float RIGHT_KEY_HIT_SCORE_SCALE = 1.08f;
-    private static final String[] TOOLBAR_LABELS = {"☺", "GIF", "", "⚙", "", "⋮"};
-    private static final float[] TOOLBAR_WEIGHTS = {1.1f, 1.35f, 1.1f, 1.1f, 0.22f, 1.0f};
     private static final String[][] SYMBOL_PAGES = {
             {"~", "!", "@", "#", "$", "%", "^", "&", "*", "+", "-", "_", "=", "?", "/", "|", "\\", "'", "`", "´", "\"", "‘", "’", "“", "”", ";"},
             {"<", ">", "(", ")", "[", "]", "{", "}", ":", ",", ".", "…", "·", "•", "°", "¿", "¡", "§", "¶", "※", "№", "©", "®", "™", "℠", "℗"},
@@ -81,6 +79,7 @@ public class KeyboardSurfaceView extends View {
     private boolean longPressFired;
     private boolean keyPreviewVisible;
     private boolean gestureDragStarted;
+    private boolean pressedKeyHandledOnTouchDown;
     private boolean gesturePreviewVisible;
     private boolean gesturePreviewHapticPlayed;
     private String gesturePreviewLabel = "";
@@ -252,8 +251,7 @@ public class KeyboardSurfaceView extends View {
         int bodyHeightDp = mode != KeyboardMode.SYMBOLS && rowCount >= 5
                 ? TALL_KEYBOARD_BODY_DP
                 : DEFAULT_KEYBOARD_BODY_DP;
-        int desiredHeight = toolbarHeight()
-                + Math.round(dp(bodyHeightDp) * heightScale)
+        int desiredHeight = Math.round(dp(bodyHeightDp) * heightScale)
                 + bottomSafeInset();
         int height = resolveSize(desiredHeight, heightMeasureSpec);
         setMeasuredDimension(width, height);
@@ -270,15 +268,13 @@ public class KeyboardSurfaceView extends View {
         super.onDraw(canvas);
 
         float gap = dp(4);
-        float toolbarHeight = toolbarHeight();
-        drawToolbar(canvas, toolbarHeight);
         if (clipboardContextVisible) {
-            drawClipboardPanel(canvas, toolbarHeight);
+            drawClipboardPanel(canvas);
             return;
         }
-        float top = toolbarHeight + gap;
+        float top = gap;
         float keyboardHeight = keyboardHeight();
-        float rowAreaHeight = keyboardHeight - toolbarHeight;
+        float rowAreaHeight = keyboardHeight;
         float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
         paint.setTextAlign(Paint.Align.CENTER);
 
@@ -350,10 +346,10 @@ public class KeyboardSurfaceView extends View {
                     }
                     invalidate();
                 }
-                if (pressedKey == null || (!pressedKey.toolbar && !pressedKey.clipboard)) {
+                if (pressedKey == null || !pressedKey.clipboard) {
                     gesturePoints.add(new GestureVowelMapper.Point(moveX, moveY, event.getEventTime()));
                 }
-                if (gesturePreviewVisible && pressedKey != null && !pressedKey.toolbar && !pressedKey.clipboard) {
+                if (gesturePreviewVisible && pressedKey != null && !pressedKey.clipboard) {
                     updateGesturePreview(pressedKey);
                 }
                 return true;
@@ -395,36 +391,39 @@ public class KeyboardSurfaceView extends View {
     }
 
     private void beginKeyTouch(float x, float y, long eventTime) {
+        beginKeyTouch(x, y, eventTime, null);
+    }
+
+    private void beginKeyTouch(float x, float y, long eventTime, DeferredPointerTap deferredTap) {
         requestParentTouchIntercept(false);
         cancelScheduledLongPress();
         cancelScheduledKeyPreview();
         longPressFired = false;
         keyPreviewVisible = false;
         gestureDragStarted = false;
+        pressedKeyHandledOnTouchDown = false;
         clearGesturePreview();
         touchDownX = x;
         touchDownY = y;
         gesturePoints.clear();
-        pressedKey = findToolbarKey(x, y);
-        if (!isActionableKey(pressedKey)) {
-            pressedKey = null;
-        }
-        if (pressedKey == null) {
-            if (clipboardContextVisible) {
-                pressedKey = findClipboardKey(x, y);
-                if (!isActionableKey(pressedKey)) {
-                    pressedKey = null;
+        if (clipboardContextVisible) {
+            pressedKey = findClipboardKey(x, y);
+            if (!isActionableKey(pressedKey)) {
+                pressedKey = null;
+            }
+        } else {
+            pressedKey = deferredTap == null ? findKey(x, y) : deferredTap.keyBounds;
+            if (!isActionableKey(pressedKey)) {
+                pressedKey = null;
+            }
+            if (pressedKey != null) {
+                gesturePoints.add(new GestureVowelMapper.Point(x, y, eventTime));
+                pressedKeyHandledOnTouchDown = deferredTap != null && deferredTap.handledOnTouchDown;
+                if (!pressedKeyHandledOnTouchDown) {
+                    pressedKeyHandledOnTouchDown = handleKeyTouchDownImmediately(pressedKey);
                 }
-            } else {
-                pressedKey = findKey(x, y);
-                if (!isActionableKey(pressedKey)) {
-                    pressedKey = null;
-                }
-                if (pressedKey != null) {
-                    gesturePoints.add(new GestureVowelMapper.Point(x, y, eventTime));
-                    scheduleKeyPreviewIfNeeded(pressedKey);
-                    scheduleLongPressIfNeeded(pressedKey);
-                }
+                scheduleKeyPreviewIfNeeded(pressedKey);
+                scheduleLongPressIfNeeded(pressedKey);
             }
         }
         invalidate();
@@ -438,6 +437,7 @@ public class KeyboardSurfaceView extends View {
         if (longPressFired) {
             longPressFired = false;
             pressedKey = null;
+            pressedKeyHandledOnTouchDown = false;
             keyPreviewVisible = false;
             gestureDragStarted = false;
             clearGesturePreview();
@@ -447,25 +447,17 @@ public class KeyboardSurfaceView extends View {
         }
         if (releasedKey == null || listener == null) {
             pressedKey = null;
+            pressedKeyHandledOnTouchDown = false;
             keyPreviewVisible = false;
             gestureDragStarted = false;
             clearGesturePreview();
             invalidate();
             gesturePoints.clear();
-            return;
-        }
-        if (releasedKey.toolbar) {
-            pressedKey = null;
-            keyPreviewVisible = false;
-            gestureDragStarted = false;
-            clearGesturePreview();
-            invalidate();
-            gesturePoints.clear();
-            listener.onKey(releasedKey.key);
             return;
         }
         if (releasedKey.clipboard) {
             pressedKey = null;
+            pressedKeyHandledOnTouchDown = false;
             keyPreviewVisible = false;
             gestureDragStarted = false;
             clearGesturePreview();
@@ -475,6 +467,7 @@ public class KeyboardSurfaceView extends View {
             return;
         }
         gesturePoints.add(new GestureVowelMapper.Point(x, y, eventTime));
+        boolean keyHandledOnTouchDown = pressedKeyHandledOnTouchDown;
         boolean gestureCandidate = gestureDragStarted
                 || movedBeyondGestureStartSlop(x, y);
         String spaceSymbol = gestureCandidate ? spaceSymbolForGesture(releasedKey) : null;
@@ -489,6 +482,7 @@ public class KeyboardSurfaceView extends View {
             playCommitHaptic = playCommitHaptic && !finalPreviewChanged;
         }
         pressedKey = null;
+        pressedKeyHandledOnTouchDown = false;
         keyPreviewVisible = false;
         gestureDragStarted = false;
         clearGesturePreview();
@@ -499,10 +493,12 @@ public class KeyboardSurfaceView extends View {
         } else if (shouldHandleGesture(releasedKey.key, vowel)) {
             notifyGestureTrace(releasedKey, vowel, tracedPoints);
             gesturePoints.clear();
-            listener.onGesture(releasedKey.key, vowel, playCommitHaptic);
+            listener.onGesture(releasedKey.key, vowel, playCommitHaptic, keyHandledOnTouchDown);
         } else {
             gesturePoints.clear();
-            listener.onKey(releasedKey.key);
+            if (!keyHandledOnTouchDown) {
+                listener.onKey(releasedKey.key);
+            }
         }
     }
 
@@ -513,10 +509,28 @@ public class KeyboardSurfaceView extends View {
         longPressFired = false;
         keyPreviewVisible = false;
         gestureDragStarted = false;
+        pressedKeyHandledOnTouchDown = false;
         clearGesturePreview();
         pressedKey = null;
         gesturePoints.clear();
         invalidate();
+    }
+
+    private boolean handleKeyTouchDownImmediately(KeyBounds keyBounds) {
+        if (!shouldHandleKeyTouchDownImmediately(keyBounds)) {
+            return false;
+        }
+        listener.onKeyTouchDown(keyBounds.key);
+        return true;
+    }
+
+    private boolean shouldHandleKeyTouchDownImmediately(KeyBounds keyBounds) {
+        return listener != null
+                && keyBounds != null
+                && !keyBounds.clipboard
+                && keyBounds.key != null
+                && (keyBounds.key.type == KeySpec.Type.DELETE
+                || (mode == KeyboardMode.HANGUL && keyBounds.key.type == KeySpec.Type.HANGUL_CONSONANT));
     }
 
     private void commitPressedKeyAsTap() {
@@ -530,11 +544,15 @@ public class KeyboardSurfaceView extends View {
         longPressFired = false;
         keyPreviewVisible = false;
         gestureDragStarted = false;
+        boolean keyHandledOnTouchDown = pressedKeyHandledOnTouchDown;
+        pressedKeyHandledOnTouchDown = false;
         clearGesturePreview();
         pressedKey = null;
         gesturePoints.clear();
         invalidate();
-        listener.onKey(keyBounds.key);
+        if (!keyHandledOnTouchDown) {
+            listener.onKey(keyBounds.key);
+        }
     }
 
     private void ignoreActivePointer() {
@@ -555,8 +573,10 @@ public class KeyboardSurfaceView extends View {
             return false;
         }
         activePointerId = event.getPointerId(nextPointerIndex);
+        DeferredPointerTap deferredTap = deferredPointerTap(activePointerId);
         removeDeferredPointerTap(activePointerId);
-        beginKeyTouch(event.getX(nextPointerIndex), event.getY(nextPointerIndex), event.getEventTime());
+        beginKeyTouch(event.getX(nextPointerIndex), event.getY(nextPointerIndex),
+                event.getEventTime(), deferredTap);
         return true;
     }
 
@@ -585,11 +605,12 @@ public class KeyboardSurfaceView extends View {
             return;
         }
         removeDeferredPointerTap(pointerId);
-        deferredPointerTaps.add(new DeferredPointerTap(pointerId, keyBounds));
+        boolean handledOnTouchDown = handleKeyTouchDownImmediately(keyBounds);
+        deferredPointerTaps.add(new DeferredPointerTap(pointerId, keyBounds, handledOnTouchDown));
     }
 
     private boolean canDeferPointerTap(KeyBounds keyBounds) {
-        if (keyBounds == null || keyBounds.toolbar || keyBounds.clipboard) {
+        if (keyBounds == null || keyBounds.clipboard) {
             return false;
         }
         switch (keyBounds.key.type) {
@@ -626,7 +647,14 @@ public class KeyboardSurfaceView extends View {
         deferredPointerTaps.clear();
         for (DeferredPointerTap tap : taps) {
             if (tap.released) {
-                listener.onKey(tap.keyBounds.key);
+                if (tap.handledOnTouchDown) {
+                    continue;
+                }
+                if (shouldHandleKeyTouchDownImmediately(tap.keyBounds)) {
+                    listener.onKeyTouchDown(tap.keyBounds.key);
+                } else {
+                    listener.onKey(tap.keyBounds.key);
+                }
             } else {
                 deferredPointerTaps.add(tap);
             }
@@ -655,23 +683,18 @@ public class KeyboardSurfaceView extends View {
                 || listener == null
                 || longPressFired
                 || gestureDragStarted
-                || pressedKey.toolbar
                 || pressedKey.clipboard
                 || pressedKey.key.type != KeySpec.Type.SPACE) {
             return false;
         }
         KeyBounds nextKey = actionableKeyAt(x, y);
         return nextKey != null
-                && !nextKey.toolbar
                 && !nextKey.clipboard
                 && nextKey.key.type != KeySpec.Type.SPACE;
     }
 
     private KeyBounds actionableKeyAt(float x, float y) {
-        KeyBounds keyBounds = findToolbarKey(x, y);
-        if (keyBounds == null) {
-            keyBounds = clipboardContextVisible ? findClipboardKey(x, y) : findKey(x, y);
-        }
+        KeyBounds keyBounds = clipboardContextVisible ? findClipboardKey(x, y) : findKey(x, y);
         return isActionableKey(keyBounds) ? keyBounds : null;
     }
 
@@ -781,7 +804,6 @@ public class KeyboardSurfaceView extends View {
 
     private boolean canShowGesturePreview(KeyBounds keyBounds) {
         return keyBounds != null
-                && !keyBounds.toolbar
                 && !keyBounds.clipboard
                 && mode == KeyboardMode.HANGUL
                 && canStartVowelGesture(keyBounds.key);
@@ -833,6 +855,9 @@ public class KeyboardSurfaceView extends View {
         if (keyBounds == null || listener == null || !canLongPress(keyBounds.key)) {
             return;
         }
+        if (pressedKeyHandledOnTouchDown && keyBounds.key.type == KeySpec.Type.HANGUL_CONSONANT) {
+            return;
+        }
         KeySpec key = keyBounds.key;
         longPressRunnable = () -> {
             if (pressedKey == null || pressedKey.key != key || listener == null) {
@@ -875,7 +900,7 @@ public class KeyboardSurfaceView extends View {
     }
 
     private boolean canLongPressClipboardContext(KeySpec key) {
-        return !clipboardContextVisible && key.type == KeySpec.Type.SPACE;
+        return !clipboardContextVisible && mode == KeyboardMode.HANGUL && key.type == KeySpec.Type.SETTINGS;
     }
 
     private KeySpec longPressKeyFor(KeySpec key) {
@@ -938,11 +963,28 @@ public class KeyboardSurfaceView extends View {
     private boolean movedBeyondGestureStartSlop(float x, float y) {
         float dx = x - touchDownX;
         float dy = y - touchDownY;
-        return Math.hypot(dx, dy) > dp(GESTURE_START_SLOP_DP);
+        return Math.hypot(dx, dy) > gestureStartSlopPx();
+    }
+
+    private float gestureStartSlopPx() {
+        float defaultSlop = dp(GESTURE_START_SLOP_DP);
+        if (settings == null) {
+            return defaultSlop;
+        }
+        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+        float fallbackDpi = metrics.densityDpi > 0 ? metrics.densityDpi : metrics.density * 160f;
+        float xDpi = reasonableDpi(metrics.xdpi) ? metrics.xdpi : fallbackDpi;
+        float yDpi = reasonableDpi(metrics.ydpi) ? metrics.ydpi : fallbackDpi;
+        float shortStrokePx = settings.shortStrokeMm() * Math.max(1f, Math.min(xDpi, yDpi) / 25.4f);
+        return Math.max(dp(1), Math.min(defaultSlop, shortStrokePx));
+    }
+
+    private boolean reasonableDpi(float dpi) {
+        return dpi >= 80f && dpi <= 900f;
     }
 
     private void drawKeyPreview(Canvas canvas) {
-        if (pressedKey == null || pressedKey.toolbar || pressedKey.clipboard) {
+        if (pressedKey == null || pressedKey.clipboard) {
             return;
         }
         boolean gesturePreview = gesturePreviewVisible && !gesturePreviewLabel.isEmpty();
@@ -1151,81 +1193,11 @@ public class KeyboardSurfaceView extends View {
         return key.type == KeySpec.Type.HANGUL_CONSONANT ? 22 : 24;
     }
 
-    private void drawToolbar(Canvas canvas, float toolbarHeight) {
+    private void drawClipboardPanel(Canvas canvas) {
         SettingsStore.KeyboardTheme theme = settings.theme;
         float contentLeft = keyboardLeftInset();
         float contentWidth = keyboardContentWidth();
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(theme.background);
-        canvas.drawRect(contentLeft, 0, contentLeft + contentWidth, toolbarHeight, paint);
-
-        float totalWeight = toolbarTotalWeight();
-        float left = contentLeft;
-        paint.setTextAlign(Paint.Align.CENTER);
-        for (int i = 0; i < TOOLBAR_LABELS.length; i++) {
-            float width = contentWidth * (TOOLBAR_WEIGHTS[i] / totalWeight);
-            float centerX = left + width / 2f;
-            if (i == 4) {
-                paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(Math.max(1f, dp(1)));
-                paint.setColor(theme.stroke);
-                float dividerX = centerX;
-                canvas.drawLine(dividerX, dp(12), dividerX, toolbarHeight - dp(12), paint);
-            } else if (i == 2) {
-                drawClipboardIcon(canvas, centerX, toolbarHeight / 2f, theme.hint);
-            } else {
-                paint.setStyle(Paint.Style.FILL);
-                paint.setColor(theme.hint);
-                boolean gif = "GIF".equals(TOOLBAR_LABELS[i]);
-                paint.setTextSize(gif ? dp(18) : dp(25));
-                paint.setFakeBoldText(gif);
-                drawCenteredText(canvas, TOOLBAR_LABELS[i], centerX, toolbarHeight / 2f);
-                paint.setFakeBoldText(false);
-            }
-            left += width;
-        }
-
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(Math.max(1f, dp(0.5f)));
-        paint.setColor(theme.stroke);
-        canvas.drawLine(contentLeft, toolbarHeight - dp(0.5f),
-                contentLeft + contentWidth, toolbarHeight - dp(0.5f), paint);
-        paint.setStyle(Paint.Style.FILL);
-    }
-
-    private void drawClipboardIcon(Canvas canvas, float centerX, float centerY, int color) {
-        float width = dp(19);
-        float height = dp(22);
-        RectF board = new RectF(centerX - width / 2f, centerY - height / 2f + dp(1),
-                centerX + width / 2f, centerY + height / 2f + dp(1));
-        RectF clip = new RectF(centerX - dp(6), board.top - dp(3),
-                centerX + dp(6), board.top + dp(5));
-
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(Math.max(1.8f, dp(1.8f)));
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setStrokeJoin(Paint.Join.ROUND);
-        paint.setColor(color);
-        canvas.drawRoundRect(board, dp(3), dp(3), paint);
-        canvas.drawRoundRect(clip, dp(3), dp(3), paint);
-
-        float lineLeft = board.left + dp(5);
-        float lineRight = board.right - dp(5);
-        float lineY = board.top + dp(10);
-        paint.setStrokeWidth(Math.max(1.4f, dp(1.4f)));
-        canvas.drawLine(lineLeft, lineY, lineRight, lineY, paint);
-        canvas.drawLine(lineLeft, lineY + dp(6), lineRight, lineY + dp(6), paint);
-
-        paint.setStrokeCap(Paint.Cap.BUTT);
-        paint.setStrokeJoin(Paint.Join.MITER);
-        paint.setStyle(Paint.Style.FILL);
-    }
-
-    private void drawClipboardPanel(Canvas canvas, float toolbarHeight) {
-        SettingsStore.KeyboardTheme theme = settings.theme;
-        float contentLeft = keyboardLeftInset();
-        float contentWidth = keyboardContentWidth();
-        RectF panel = new RectF(contentLeft + dp(10), toolbarHeight + dp(8),
+        RectF panel = new RectF(contentLeft + dp(10), dp(8),
                 contentLeft + contentWidth - dp(10), keyboardHeight() - dp(8));
 
         paint.setShader(null);
@@ -1460,9 +1432,9 @@ public class KeyboardSurfaceView extends View {
 
     private KeyBounds findKey(float x, float y) {
         float gap = dp(4);
-        float top = toolbarHeight() + gap;
+        float top = gap;
         float keyboardHeight = keyboardHeight();
-        float rowAreaHeight = keyboardHeight - toolbarHeight();
+        float rowAreaHeight = keyboardHeight;
         float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
         KeyBounds bestKey = null;
         float bestScore = Float.MAX_VALUE;
@@ -1503,9 +1475,9 @@ public class KeyboardSurfaceView extends View {
             return null;
         }
         float gap = dp(4);
-        float top = toolbarHeight() + gap;
+        float top = gap;
         float keyboardHeight = keyboardHeight();
-        float rowAreaHeight = keyboardHeight - toolbarHeight();
+        float rowAreaHeight = keyboardHeight;
         float rowHeight = (rowAreaHeight - gap * (rows.size() + 1)) / rows.size();
         for (RowLayout row : rows) {
             float totalWeight = row.totalWeight();
@@ -1529,63 +1501,18 @@ public class KeyboardSurfaceView extends View {
     private KeyBounds findClipboardKey(float x, float y) {
         if (clipboardCloseRect.contains(x, y)) {
             return new KeyBounds(KeySpec.command("", KeySpec.Type.CLIPBOARD_CLOSE), new RectF(clipboardCloseRect),
-                    false, true);
+                    true);
         }
-        RectF grid = new RectF(keyboardLeftInset() + dp(10), toolbarHeight() + dp(50),
+        RectF grid = new RectF(keyboardLeftInset() + dp(10), dp(50),
                 keyboardLeftInset() + keyboardContentWidth() - dp(10), keyboardHeight() - dp(8));
         layoutClipboardCards(grid);
         for (ClipboardCard card : clipboardCards) {
             if (card.rect.contains(x, y)) {
                 return new KeyBounds(KeySpec.clipboardPaste("", card.clip.index, 1f), new RectF(card.rect),
-                        false, true);
+                        true);
             }
         }
         return null;
-    }
-
-    private KeyBounds findToolbarKey(float x, float y) {
-        float toolbarHeight = toolbarHeight();
-        if (y < 0 || y > toolbarHeight) {
-            return null;
-        }
-        float totalWeight = toolbarTotalWeight();
-        float left = keyboardLeftInset();
-        float contentWidth = keyboardContentWidth();
-        for (int i = 0; i < TOOLBAR_LABELS.length; i++) {
-            float width = contentWidth * (TOOLBAR_WEIGHTS[i] / totalWeight);
-            RectF rect = new RectF(left, 0, left + width, toolbarHeight);
-            if (rect.contains(x, y)) {
-                return new KeyBounds(toolbarKeyForIndex(i), rect, true);
-            }
-            left += width;
-        }
-        return null;
-    }
-
-    private KeySpec toolbarKeyForIndex(int index) {
-        switch (index) {
-            case 0:
-                return KeySpec.command("", KeySpec.Type.MODE_SYMBOLS);
-            case 2:
-                return KeySpec.command("", KeySpec.Type.CLIPBOARD_CONTEXT);
-            case 3:
-            case 5:
-                return KeySpec.command("", KeySpec.Type.SETTINGS);
-            default:
-                return KeySpec.command("", KeySpec.Type.NO_OP);
-        }
-    }
-
-    private float toolbarTotalWeight() {
-        float total = 0f;
-        for (float weight : TOOLBAR_WEIGHTS) {
-            total += weight;
-        }
-        return total;
-    }
-
-    private int toolbarHeight() {
-        return dp(52);
     }
 
     private float keyboardHeight() {
@@ -1654,7 +1581,7 @@ public class KeyboardSurfaceView extends View {
         }
         float contentLeft = keyboardLeftInset();
         float contentRight = contentLeft + keyboardContentWidth();
-        float keyboardTop = toolbarHeight();
+        float keyboardTop = 0f;
         float keyboardBottom = keyboardHeight();
         RectF hitRect = new RectF(
                 Math.max(contentLeft, rect.left - slop),
@@ -2206,21 +2133,15 @@ public class KeyboardSurfaceView extends View {
     private static class KeyBounds {
         final KeySpec key;
         final RectF rect;
-        final boolean toolbar;
         final boolean clipboard;
 
         KeyBounds(KeySpec key, RectF rect) {
-            this(key, rect, false, false);
+            this(key, rect, false);
         }
 
-        KeyBounds(KeySpec key, RectF rect, boolean toolbar) {
-            this(key, rect, toolbar, false);
-        }
-
-        KeyBounds(KeySpec key, RectF rect, boolean toolbar, boolean clipboard) {
+        KeyBounds(KeySpec key, RectF rect, boolean clipboard) {
             this.key = key;
             this.rect = rect;
-            this.toolbar = toolbar;
             this.clipboard = clipboard;
         }
     }
@@ -2228,11 +2149,13 @@ public class KeyboardSurfaceView extends View {
     private static class DeferredPointerTap {
         final int pointerId;
         final KeyBounds keyBounds;
+        final boolean handledOnTouchDown;
         boolean released;
 
-        DeferredPointerTap(int pointerId, KeyBounds keyBounds) {
+        DeferredPointerTap(int pointerId, KeyBounds keyBounds, boolean handledOnTouchDown) {
             this.pointerId = pointerId;
             this.keyBounds = keyBounds;
+            this.handledOnTouchDown = handledOnTouchDown;
         }
     }
 

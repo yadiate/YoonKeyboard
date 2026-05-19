@@ -102,9 +102,7 @@ public class HangulComposer {
 
     public String inputVowel(int nextVowel) {
         if (lead < 0) {
-            lead = Consonant.IEUNG.leadingIndex();
-            vowel = nextVowel;
-            return "";
+            return compatVowel(nextVowel);
         }
         if (vowel < 0) {
             vowel = nextVowel;
@@ -140,9 +138,7 @@ public class HangulComposer {
             return "";
         }
         String committed = commit();
-        lead = Consonant.IEUNG.leadingIndex();
-        vowel = nextVowel;
-        return committed;
+        return committed + compatVowel(nextVowel);
     }
 
     public boolean backspace() {
@@ -177,9 +173,25 @@ public class HangulComposer {
         return false;
     }
 
-    public String promoteCombinedFinalToDoubleInitial(Consonant base, Consonant replacement) {
+    public boolean canPromoteCombinedFinalToDoubleInitial(Consonant base) {
+        if (base == null || tail <= 0) {
+            return false;
+        }
+        FinalSplit split = FINAL_SPLITS.get(tail);
+        return split != null && split.nextLeading == base;
+    }
+
+    public String promoteFinalToDoubleInitial(Consonant base, Consonant replacement) {
         if (base == null || replacement == null || lead < 0 || vowel < 0 || tail <= 0) {
             return null;
+        }
+        if (tail == base.finalIndex()) {
+            int previousLead = lead;
+            int previousVowel = vowel;
+            lead = replacement.leadingIndex();
+            vowel = -1;
+            tail = 0;
+            return compose(previousLead, previousVowel, 0);
         }
         FinalSplit split = FINAL_SPLITS.get(tail);
         if (split == null || split.nextLeading != base) {
@@ -194,8 +206,52 @@ public class HangulComposer {
         return compose(previousLead, previousVowel, previousTail);
     }
 
+    public String moveFinalToInitialForTouchedConsonant(Consonant touchedConsonant) {
+        Consonant nextLead = finalInitialForTouchedConsonant(touchedConsonant);
+        if (nextLead == null) {
+            return null;
+        }
+        int previousLead = lead;
+        int previousVowel = vowel;
+        int previousTail = 0;
+        FinalSplit split = FINAL_SPLITS.get(tail);
+        if (split != null) {
+            previousTail = split.remainingFinal;
+        }
+        lead = nextLead.leadingIndex();
+        vowel = -1;
+        tail = 0;
+        return compose(previousLead, previousVowel, previousTail);
+    }
+
+    private Consonant finalInitialForTouchedConsonant(Consonant touchedConsonant) {
+        if (touchedConsonant == null || lead < 0 || vowel < 0 || tail <= 0) {
+            return null;
+        }
+        FinalSplit split = FINAL_SPLITS.get(tail);
+        if (split != null) {
+            return split.nextLeading == touchedConsonant ? split.nextLeading : null;
+        }
+        Consonant finalConsonant = Consonant.fromFinalIndex(tail);
+        if (finalConsonant == null) {
+            return null;
+        }
+        if (finalConsonant == touchedConsonant) {
+            return finalConsonant;
+        }
+        Consonant doubleTouchedConsonant = touchedConsonant.doubleTapVariant();
+        if (doubleTouchedConsonant != null && finalConsonant == doubleTouchedConsonant) {
+            return finalConsonant;
+        }
+        return null;
+    }
+
     public boolean hasComposingText() {
         return lead >= 0 || vowel >= 0 || tail > 0;
+    }
+
+    public boolean isLeadingOnly() {
+        return lead >= 0 && vowel < 0 && tail == 0;
     }
 
     public String getComposingText() {
