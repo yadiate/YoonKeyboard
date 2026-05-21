@@ -54,6 +54,8 @@ public class EightWayInputMethodService extends InputMethodService
     private boolean immediateConsonantPlaceholderVisible;
     private Consonant recentlySettledStandaloneConsonant;
     private long recentlySettledStandaloneConsonantTimeMs;
+    private int lastComposingStart = -1;
+    private int lastComposingEnd = -1;
 
     @Override
     public View onCreateInputView() {
@@ -96,6 +98,7 @@ public class EightWayInputMethodService extends InputMethodService
         }
         composer.reset();
         immediateConsonantPlaceholderVisible = false;
+        clearComposingRange();
         clearSettledStandaloneRecovery();
         resetDoubleConsonantTapState();
     }
@@ -131,6 +134,38 @@ public class EightWayInputMethodService extends InputMethodService
         currentEditorImeOptions = EditorInfo.IME_ACTION_UNSPECIFIED;
         currentEditorActionId = 0;
         super.onFinishInput();
+    }
+
+    @Override
+    public void onUpdateSelection(
+            int oldSelStart,
+            int oldSelEnd,
+            int newSelStart,
+            int newSelEnd,
+            int candidatesStart,
+            int candidatesEnd
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd);
+        boolean selectionMoved = oldSelStart != newSelStart || oldSelEnd != newSelEnd;
+        if (selectionMoved) {
+            clearSettledStandaloneRecovery();
+            resetDoubleConsonantTapState();
+        }
+        if (!composer.hasComposingText() && !immediateConsonantPlaceholderVisible) {
+            return;
+        }
+        boolean hasComposingRange = candidatesStart >= 0 && candidatesEnd >= candidatesStart;
+        if (hasComposingRange) {
+            lastComposingStart = candidatesStart;
+            lastComposingEnd = candidatesEnd;
+        }
+        if (hasComposingRange && isCursorStillAtComposingEnd(newSelStart, newSelEnd, candidatesEnd)) {
+            return;
+        }
+        if (!hasComposingRange && !selectionMovedOutsideLastComposingRange(newSelStart, newSelEnd)) {
+            return;
+        }
+        finishExternalComposingTextAndResetAutomata();
     }
 
     @Override
@@ -497,6 +532,38 @@ public class EightWayInputMethodService extends InputMethodService
     private void resetDoubleConsonantTapState() {
         lastConsonantTap = null;
         lastConsonantTapTimeMs = 0L;
+    }
+
+    private boolean isCursorStillAtComposingEnd(
+            int newSelStart,
+            int newSelEnd,
+            int candidatesEnd
+    ) {
+        return newSelStart == candidatesEnd
+                && newSelEnd == candidatesEnd;
+    }
+
+    private boolean selectionMovedOutsideLastComposingRange(int newSelStart, int newSelEnd) {
+        return lastComposingStart >= 0
+                && lastComposingEnd >= lastComposingStart
+                && (newSelStart != lastComposingEnd || newSelEnd != lastComposingEnd);
+    }
+
+    private void finishExternalComposingTextAndResetAutomata() {
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection != null) {
+            inputConnection.finishComposingText();
+        }
+        composer.reset();
+        immediateConsonantPlaceholderVisible = false;
+        clearComposingRange();
+        clearSettledStandaloneRecovery();
+        resetDoubleConsonantTapState();
+    }
+
+    private void clearComposingRange() {
+        lastComposingStart = -1;
+        lastComposingEnd = -1;
     }
 
     private void undoImmediateHangulTouchDown() {

@@ -101,11 +101,11 @@ powershell -ExecutionPolicy Bypass -File tools\build-test-apks.ps1
 `tools\build-test-apks.ps1`는 현재 패키지 APK와 레거시 패키지 제거용 APK를 `dist\`에 복사하고 SHA256을 출력한다. 산출 APK를 확인할 때는:
 
 ```powershell
-& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk
+& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.37.apk
 $env:JAVA_HOME = "C:\Users\yadia\AppData\Local\Programs\Rider\jbr"
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk
-Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk
+& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.37.apk
+Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.37.apk
 ```
 
 실기기 설치는 기기가 `adb devices`에 잡힌 뒤:
@@ -163,6 +163,9 @@ powershell -ExecutionPolicy Bypass -File tools\install-current.ps1 -RemoveLegacy
   - 새 버전이 있을 때만 아래 업데이트 다운로드 항목이 연한 글씨에서 활성 상태로 바뀐다.
   - 최신 버전이면 `최신버전입니다!` 토스트를 짧게 보여준다.
   - 다운로드 후 Android 패키지 설치 화면을 열고, Android 8 이상에서는 필요 시 알 수 없는 앱 설치 권한 화면을 먼저 연다.
+- 2026-05-21에 한글 조합 중 커서 이동 버그를 수정했다.
+  - 사용자가 터치로 글씨 입력창의 다른 위치로 이동하면 `onUpdateSelection()`에서 기존 composing span을 `finishComposingText()`로 제자리 확정하고 내부 한글 오토마타/쌍자음/복구 상태를 리셋한다.
+  - 이후 새 글자를 입력해도 이전 조합 위치로 커서가 되돌아가지 않는다.
 - 개인정보 이슈 때문에 비밀번호 문구 저장 기능은 구현하지 않았다.
 
 ## 주요 파일
@@ -209,8 +212,8 @@ app\build\outputs\bundle\release\app-release.aab
 
 - applicationId: `com.yadiate.yoonkeyboard`
 - namespace: `com.yadiate.yoonkeyboard`
-- versionCode: `38`
-- versionName: `0.2.36`
+- versionCode: `39`
+- versionName: `0.2.37`
 - minSdk: `21`
 - targetSdk: `35`
 - compileSdk: `35`
@@ -218,7 +221,7 @@ app\build\outputs\bundle\release\app-release.aab
 현재 APK SHA256:
 
 ```text
-AA3ABD61D4E0983DFF0D04E33C05ACE5644FD7AB5705254DB0F561FFEF1518F0
+12498EBD9639164FEC0A07E41ADF94F4F8F312AB8B186FC754611667DD4791E1
 ```
 
 ## 최근 검증

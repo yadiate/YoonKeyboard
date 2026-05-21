@@ -17,9 +17,9 @@ $gradle = Join-Path $root "gradlew.bat"
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-$currentApk = Join-Path $dist "YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk"
-$legacyReleaseApk = Join-Path $dist "YoonKeyboard-legacy-com.example.eightwayime-v0.2.36-legacyfix-release.apk"
-$legacyDebugApk = Join-Path $dist "YoonKeyboard-legacy-com.example.eightwayime-v0.2.36-legacyfix-debug.apk"
+$currentApk = Join-Path $dist "YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.37.apk"
+$legacyReleaseApk = Join-Path $dist "YoonKeyboard-legacy-com.example.eightwayime-v0.2.37-legacyfix-release.apk"
+$legacyDebugApk = Join-Path $dist "YoonKeyboard-legacy-com.example.eightwayime-v0.2.37-legacyfix-debug.apk"
 
 if (-not $SkipSim) {
     & powershell -ExecutionPolicy Bypass -File (Join-Path $root "tools\run-ime-sim.ps1")
@@ -38,7 +38,7 @@ Copy-Item -LiteralPath (Join-Path $root "app\build\outputs\apk\release\app-relea
 $legacyProps = @(
     "-PkeyboardApplicationId=com.example.eightwayime",
     "-PkeyboardVersionCode=100033",
-    "-PkeyboardVersionName=0.2.36-legacyfix",
+    "-PkeyboardVersionName=0.2.37-legacyfix",
     "-PkeyboardAppLabel=YoonKeyboard LEGACY REMOVE"
 )
 
