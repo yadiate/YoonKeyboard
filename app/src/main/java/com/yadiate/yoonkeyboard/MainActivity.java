@@ -42,6 +42,7 @@ import com.yadiate.yoonkeyboard.hangul.Consonant;
 import com.yadiate.yoonkeyboard.hangul.GestureCalibration;
 import com.yadiate.yoonkeyboard.hangul.CalibrationPlanner;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 
@@ -61,6 +62,8 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private LinearLayout root;
     private Runnable backAction;
+    private File pendingUpdateApk;
+    private boolean updateInProgress;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,6 +71,16 @@ public class MainActivity extends Activity {
         prefs = SettingsStore.prefs(this);
         applySystemBars();
         buildSettingsScreen();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (pendingUpdateApk != null && GitHubReleaseUpdater.canRequestPackageInstalls(this)) {
+            File apkFile = pendingUpdateApk;
+            pendingUpdateApk = null;
+            beginUpdateInstall(apkFile);
+        }
     }
 
     @Override
@@ -111,6 +124,7 @@ public class MainActivity extends Activity {
         addSystemSection();
         addKeyboardSection();
         addFeedbackSection();
+        addUpdateSection();
         addBackupSection();
         if (animate) {
             animatePageFrom(direction);
@@ -906,6 +920,67 @@ public class MainActivity extends Activity {
                 "\uC635\uC158 \uBD88\uB7EC\uC624\uAE30",
                 "\uD074\uB9BD\uBCF4\uB4DC\uC758 \uC635\uC158\uAC12\uC744 \uBCF5\uC6D0\uD569\uB2C8\uB2E4.",
                 this::loadOptionsFromClipboard);
+    }
+
+    private void addUpdateSection() {
+        addSectionTitle("\uC5C5\uB370\uC774\uD2B8");
+        LinearLayout card = addCard();
+        addActionRow(card,
+                "GitHub \uB9B4\uB9AC\uC988 \uC124\uCE58",
+                "\uD604\uC7AC " + currentVersionName()
+                        + ". \uCD5C\uC2E0 \uB9B4\uB9AC\uC988 APK\uB97C \uB0B4\uB824\uBC1B\uC544 \uC124\uCE58\uB97C \uC2DC\uC791\uD569\uB2C8\uB2E4.",
+                this::startGitHubReleaseUpdate);
+    }
+
+    private String currentVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception ex) {
+            return "\uC54C \uC218 \uC5C6\uC74C";
+        }
+    }
+
+    private void startGitHubReleaseUpdate() {
+        if (updateInProgress) {
+            showToast("\uC5C5\uB370\uC774\uD2B8\uB97C \uC774\uBBF8 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4.");
+            return;
+        }
+        updateInProgress = true;
+        GitHubReleaseUpdater.downloadLatestReleaseApk(this, new GitHubReleaseUpdater.Callback() {
+            @Override
+            public void onStatus(String message) {
+                showToast(message);
+            }
+
+            @Override
+            public void onDownloaded(File apkFile, String releaseLabel) {
+                updateInProgress = false;
+                pendingUpdateApk = apkFile;
+                showToast(releaseLabel + " APK \uB2E4\uC6B4\uB85C\uB4DC\uAC00 \uC644\uB8CC\uB410\uC2B5\uB2C8\uB2E4.");
+                beginUpdateInstall(apkFile);
+            }
+
+            @Override
+            public void onError(String message) {
+                updateInProgress = false;
+                showToast(message);
+            }
+        });
+    }
+
+    private void beginUpdateInstall(File apkFile) {
+        try {
+            if (GitHubReleaseUpdater.startInstallOrOpenPermissionSettings(this, apkFile)) {
+                pendingUpdateApk = null;
+                showToast("\uC124\uCE58 \uD654\uBA74\uC744 \uC5F4\uC5C8\uC2B5\uB2C8\uB2E4.");
+            } else {
+                pendingUpdateApk = apkFile;
+                showToast("APK \uC124\uCE58 \uAD8C\uD55C\uC744 \uD5C8\uC6A9\uD55C \uB4A4 \uC774 \uD654\uBA74\uC73C\uB85C \uB3CC\uC544\uC624\uC138\uC694.");
+            }
+        } catch (IllegalStateException ex) {
+            pendingUpdateApk = null;
+            showToast("\uC124\uCE58 \uD654\uBA74\uC744 \uC5F4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        }
     }
 
     private void saveOptionsToClipboard() {

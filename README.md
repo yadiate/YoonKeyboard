@@ -23,6 +23,7 @@ Clean-room Android keyboard prototype based on the feature shape of the provided
 - Hangul syllable composer with basic final consonant and compound final handling.
 - English, symbol, and number modes.
 - Clipboard context panel with paste support from long-pressing the Hangul settings key.
+- GitHub Release updater that downloads the latest current-package APK and opens Android's installer.
 - Settings screen based on the analyzed APK feature set:
   - skin/theme selection
   - stroke length sensitivity
@@ -62,3 +63,9 @@ with the current package in the keyboard picker.
 ## Notes
 
 This project does not copy original APK code, drawable assets, license checks, or private data behavior. It recreates the interaction model as a new implementation.
+
+This project was vibe-coded with AI assistance. Human review, testing, signing, and release decisions remain the responsibility of the maintainer.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).

@@ -101,11 +101,11 @@ powershell -ExecutionPolicy Bypass -File tools\build-test-apks.ps1
 `tools\build-test-apks.ps1`는 현재 패키지 APK와 레거시 패키지 제거용 APK를 `dist\`에 복사하고 SHA256을 출력한다. 산출 APK를 확인할 때는:
 
 ```powershell
-& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk
+& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk
 $env:JAVA_HOME = "C:\Users\yadia\AppData\Local\Programs\Rider\jbr"
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk
-Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk
+& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk
+Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk
 ```
 
 실기기 설치는 기기가 `adb devices`에 잡힌 뒤:
@@ -158,6 +158,9 @@ powershell -ExecutionPolicy Bypass -File tools\install-current.ps1 -RemoveLegacy
 - 2026-05-20에 터치 판정 설정 화면에 비주얼 키보드 프리뷰를 추가했다.
   - 파란 면은 실제 키 영역, 빨간 선/면은 현재 설정값 기준 터치 인식 영역이다.
   - 히트박스 슬라이더를 움직이면 프리뷰가 즉시 다시 그려진다.
+- 2026-05-21에 업데이트 메뉴를 추가했다.
+  - 설정 화면의 GitHub 릴리즈 설치 항목이 `yadiate/YoonKeyboard` 최신 GitHub Release에서 현재 패키지 APK를 내려받는다.
+  - 다운로드 후 Android 패키지 설치 화면을 열고, Android 8 이상에서는 필요 시 알 수 없는 앱 설치 권한 화면을 먼저 연다.
 - 개인정보 이슈 때문에 비밀번호 문구 저장 기능은 구현하지 않았다.
 
 ## 주요 파일
@@ -204,8 +207,8 @@ app\build\outputs\bundle\release\app-release.aab
 
 - applicationId: `com.yadiate.yoonkeyboard`
 - namespace: `com.yadiate.yoonkeyboard`
-- versionCode: `36`
-- versionName: `0.2.34`
+- versionCode: `37`
+- versionName: `0.2.35`
 - minSdk: `21`
 - targetSdk: `35`
 - compileSdk: `35`
@@ -213,7 +216,7 @@ app\build\outputs\bundle\release\app-release.aab
 현재 APK SHA256:
 
 ```text
-707377A48F3F8483676212ADEEDADDD81D6EF7E339DB67D2415AFD3F1842141C
+56C7B064FE261DCD2EDB38D294BE86A0902AC3654A4A0BB802F89AF3F0C7038F
 ```
 
 ## 최근 검증
@@ -244,7 +247,8 @@ app\build\outputs\bundle\release\app-release.aab
 - 개발자 모드는 일반 APK 설치 경고를 근본적으로 없애지 않는다.
 - 삼성 기기에서는 `출처를 알 수 없는 앱 설치`, `자동 차단`, Play Protect 경고가 설치를 막을 수 있다.
 - 키보드 앱은 정상 앱이어도 Android가 입력 내용 접근 경고를 표시한다. 이 경고는 스토어 출시 후에도 완전히 없앨 수 없다.
-- 현재 앱은 `VIBRATE` 권한만 사용한다. 출시 신뢰도를 위해 `INTERNET` 권한은 명시적 필요가 생기기 전까지 추가하지 않는다.
+- 현재 앱은 `VIBRATE`, `INTERNET`, `REQUEST_INSTALL_PACKAGES` 권한을 사용한다.
+- `INTERNET`과 `REQUEST_INSTALL_PACKAGES`는 설정 화면의 GitHub Release 업데이트 설치 기능 때문에 추가됐다.
 
 ## 출시 준비 메모
 

@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 if ([string]::IsNullOrWhiteSpace($ApkPath)) {
-    $ApkPath = Join-Path $root "dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk"
+    $ApkPath = Join-Path $root "dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk"
 }
 $resolvedApk = Resolve-Path -LiteralPath $ApkPath
 
