@@ -237,10 +237,12 @@ app\build\outputs\bundle\release\app-release.aab
 
 ## 배포 상태
 
-- Google Drive에 업로드된 APK는 이전 v2 빌드다. 최신 v6 로컬 빌드는 아직 Drive에 올리지 않았다.
-- Google Drive 파일:
-  - `YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk`
-  - https://drive.google.com/file/d/1BzDmEgNbvpB3vsTnbCxqjm5HJk5MjsKd/view?usp=drivesdk
+- GitHub 최신 릴리즈:
+  - `YoonKeyboard v0.2.37`
+  - https://github.com/yadiate/YoonKeyboard/releases/tag/v0.2.37
+- Google Drive 최신 APK:
+  - `YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.37.apk`
+  - https://drive.google.com/file/d/1_hzzXk_1A03x76m6TzhhwEYaQrJ7h5Wh/view?usp=drivesdk
 - Google Drive 폴더:
   - `Codex Builds`
   - https://drive.google.com/drive/folders/1WkjdIEY8qJrw1Kx_AKc2VNpcGnN0imoL
