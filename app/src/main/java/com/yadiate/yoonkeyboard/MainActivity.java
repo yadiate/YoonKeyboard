@@ -63,7 +63,12 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private Runnable backAction;
     private File pendingUpdateApk;
+    private GitHubReleaseUpdater.UpdateCandidate pendingUpdateCandidate;
     private boolean updateInProgress;
+    private View updateDownloadRow;
+    private TextView updateDownloadTitle;
+    private TextView updateDownloadSummary;
+    private TextView updateDownloadArrow;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -926,27 +931,118 @@ public class MainActivity extends Activity {
         addSectionTitle("\uC5C5\uB370\uC774\uD2B8");
         LinearLayout card = addCard();
         addActionRow(card,
-                "GitHub \uB9B4\uB9AC\uC988 \uC124\uCE58",
-                "\uD604\uC7AC " + currentVersionName()
-                        + ". \uCD5C\uC2E0 \uB9B4\uB9AC\uC988 APK\uB97C \uB0B4\uB824\uBC1B\uC544 \uC124\uCE58\uB97C \uC2DC\uC791\uD569\uB2C8\uB2E4.",
-                this::startGitHubReleaseUpdate);
+                "\uBC84\uC804 \uD655\uC778",
+                "\uD604\uC7AC " + currentVersionName() + ". GitHub \uCD5C\uC2E0 \uB9B4\uB9AC\uC988\uC640 \uBE44\uAD50\uD569\uB2C8\uB2E4.",
+                this::checkGitHubReleaseUpdate);
+        addDivider(card);
+        addUpdateDownloadRow(card);
     }
 
     private String currentVersionName() {
         try {
-            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            String versionName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return versionName == null ? "\uC54C \uC218 \uC5C6\uC74C" : versionName;
         } catch (Exception ex) {
             return "\uC54C \uC218 \uC5C6\uC74C";
         }
     }
 
-    private void startGitHubReleaseUpdate() {
+    private void addUpdateDownloadRow(LinearLayout card) {
+        LinearLayout row = rowContainer();
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setGravity(Gravity.CENTER_VERTICAL);
+
+        updateDownloadTitle = rowTitle("\uC5C5\uB370\uC774\uD2B8 \uB2E4\uC6B4\uB85C\uB4DC");
+        texts.addView(updateDownloadTitle, matchWrap());
+        updateDownloadSummary = rowSummary("\uBC84\uC804 \uD655\uC778 \uD6C4 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+        texts.addView(updateDownloadSummary, matchWrap());
+        row.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        updateDownloadArrow = new TextView(this);
+        updateDownloadArrow.setText("›");
+        updateDownloadArrow.setTextSize(28);
+        updateDownloadArrow.setGravity(Gravity.CENTER);
+        row.addView(updateDownloadArrow, new LinearLayout.LayoutParams(dp(26), LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        row.setOnClickListener(v -> startGitHubReleaseUpdate());
+        card.addView(row, matchWrap());
+        updateDownloadRow = row;
+        setUpdateDownloadEnabled(null);
+    }
+
+    private void setUpdateDownloadEnabled(GitHubReleaseUpdater.UpdateCandidate candidate) {
+        pendingUpdateCandidate = candidate;
+        boolean enabled = candidate != null;
+        int disabledTitle = Color.rgb(176, 180, 188);
+        int disabledSummary = Color.rgb(188, 192, 200);
+        int disabledArrow = Color.rgb(196, 200, 208);
+
+        if (updateDownloadRow != null) {
+            updateDownloadRow.setEnabled(enabled);
+            updateDownloadRow.setClickable(true);
+        }
+        if (updateDownloadTitle != null) {
+            updateDownloadTitle.setTextColor(enabled ? TEXT_PRIMARY : disabledTitle);
+            updateDownloadTitle.setTypeface(Typeface.DEFAULT, enabled ? Typeface.BOLD : Typeface.NORMAL);
+        }
+        if (updateDownloadSummary != null) {
+            updateDownloadSummary.setTextColor(enabled ? TEXT_SECONDARY : disabledSummary);
+            updateDownloadSummary.setText(enabled
+                    ? candidate.releaseLabel + " APK\uB97C \uB0B4\uB824\uBC1B\uC544 \uC124\uCE58\uD569\uB2C8\uB2E4."
+                    : "\uBC84\uC804 \uD655\uC778 \uD6C4 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+        }
+        if (updateDownloadArrow != null) {
+            updateDownloadArrow.setTextColor(enabled ? Color.rgb(36, 107, 253) : disabledArrow);
+        }
+    }
+
+    private void checkGitHubReleaseUpdate() {
         if (updateInProgress) {
             showToast("\uC5C5\uB370\uC774\uD2B8\uB97C \uC774\uBBF8 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4.");
             return;
         }
         updateInProgress = true;
-        GitHubReleaseUpdater.downloadLatestReleaseApk(this, new GitHubReleaseUpdater.Callback() {
+        setUpdateDownloadEnabled(null);
+        GitHubReleaseUpdater.checkLatestRelease(this, currentVersionName(), new GitHubReleaseUpdater.CheckCallback() {
+            @Override
+            public void onStatus(String message) {
+                showToast(message);
+            }
+
+            @Override
+            public void onChecked(GitHubReleaseUpdater.UpdateCandidate candidate, boolean updateAvailable) {
+                updateInProgress = false;
+                if (updateAvailable) {
+                    setUpdateDownloadEnabled(candidate);
+                    showToast(candidate.releaseLabel + " \uC5C5\uB370\uC774\uD2B8\uAC00 \uC788\uC2B5\uB2C8\uB2E4.");
+                } else {
+                    setUpdateDownloadEnabled(null);
+                    showToast("\uCD5C\uC2E0\uBC84\uC804\uC785\uB2C8\uB2E4!");
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                updateInProgress = false;
+                setUpdateDownloadEnabled(null);
+                showToast(message);
+            }
+        });
+    }
+
+    private void startGitHubReleaseUpdate() {
+        if (pendingUpdateCandidate == null) {
+            showToast("\uBA3C\uC800 \uBC84\uC804\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
+            return;
+        }
+        if (updateInProgress) {
+            showToast("\uC5C5\uB370\uC774\uD2B8 \uC791\uC5C5\uC774 \uC9C4\uD589 \uC911\uC785\uB2C8\uB2E4.");
+            return;
+        }
+        updateInProgress = true;
+        GitHubReleaseUpdater.downloadReleaseApk(this, pendingUpdateCandidate, new GitHubReleaseUpdater.Callback() {
             @Override
             public void onStatus(String message) {
                 showToast(message);

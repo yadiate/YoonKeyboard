@@ -46,6 +46,59 @@ public final class GitHubReleaseUpdater {
         void onError(String message);
     }
 
+    public interface CheckCallback {
+        void onStatus(String message);
+
+        void onChecked(UpdateCandidate candidate, boolean updateAvailable);
+
+        void onError(String message);
+    }
+
+    public static final class UpdateCandidate {
+        public final String releaseLabel;
+        public final String tagName;
+        public final String versionName;
+        public final String downloadUrl;
+
+        private UpdateCandidate(String releaseLabel, String tagName, String versionName, String downloadUrl) {
+            this.releaseLabel = releaseLabel;
+            this.tagName = tagName;
+            this.versionName = versionName;
+            this.downloadUrl = downloadUrl;
+        }
+    }
+
+    public static void checkLatestRelease(Activity activity, String currentVersionName, CheckCallback callback) {
+        Thread worker = new Thread(() -> {
+            try {
+                postStatus(activity, callback, "GitHub 릴리즈를 확인합니다.");
+                JSONObject release = fetchLatestRelease();
+                JSONObject asset = findInstallableApkAsset(release);
+                if (asset == null) {
+                    postError(activity, callback, "GitHub 최신 릴리즈에 설치용 APK가 없습니다.");
+                    return;
+                }
+
+                String tagName = release.optString("tag_name", "");
+                String versionName = versionNameFromTag(tagName);
+                UpdateCandidate candidate = new UpdateCandidate(
+                        releaseLabel(release),
+                        tagName,
+                        versionName,
+                        asset.getString("browser_download_url"));
+                postChecked(activity, callback, candidate,
+                        compareVersions(candidate.versionName, currentVersionName) > 0);
+            } catch (JSONException ex) {
+                postError(activity, callback, "GitHub 릴리즈 정보를 읽을 수 없습니다.");
+            } catch (IOException ex) {
+                postError(activity, callback, "GitHub 릴리즈를 확인할 수 없습니다.");
+            } catch (RuntimeException ex) {
+                postError(activity, callback, "업데이트 확인을 시작할 수 없습니다.");
+            }
+        }, "YoonKeyboardReleaseChecker");
+        worker.start();
+    }
+
     public static void downloadLatestReleaseApk(Activity activity, Callback callback) {
         Thread worker = new Thread(() -> {
             try {
@@ -70,6 +123,21 @@ public final class GitHubReleaseUpdater {
                 postError(activity, callback, "업데이트를 시작할 수 없습니다.");
             }
         }, "YoonKeyboardReleaseUpdater");
+        worker.start();
+    }
+
+    public static void downloadReleaseApk(Activity activity, UpdateCandidate candidate, Callback callback) {
+        Thread worker = new Thread(() -> {
+            try {
+                postStatus(activity, callback, candidate.releaseLabel + " APK를 다운로드합니다.");
+                File apkFile = downloadApk(activity, candidate.downloadUrl);
+                postDownloaded(activity, callback, apkFile, candidate.releaseLabel);
+            } catch (IOException ex) {
+                postError(activity, callback, "업데이트 APK를 다운로드할 수 없습니다.");
+            } catch (RuntimeException ex) {
+                postError(activity, callback, "업데이트를 시작할 수 없습니다.");
+            }
+        }, "YoonKeyboardReleaseDownloader");
         worker.start();
     }
 
@@ -160,6 +228,55 @@ public final class GitHubReleaseUpdater {
         return tag.trim().isEmpty() ? "최신 릴리즈" : tag;
     }
 
+    private static String versionNameFromTag(String tagName) {
+        String value = tagName == null ? "" : tagName.trim();
+        if (value.startsWith("v") || value.startsWith("V")) {
+            value = value.substring(1);
+        }
+        return value;
+    }
+
+    private static int compareVersions(String leftVersion, String rightVersion) {
+        int[] left = versionNumbers(leftVersion);
+        int[] right = versionNumbers(rightVersion);
+        int max = Math.max(left.length, right.length);
+        for (int i = 0; i < max; i++) {
+            int leftValue = i < left.length ? left[i] : 0;
+            int rightValue = i < right.length ? right[i] : 0;
+            if (leftValue != rightValue) {
+                return leftValue < rightValue ? -1 : 1;
+            }
+        }
+        return 0;
+    }
+
+    private static int[] versionNumbers(String versionName) {
+        String clean = versionName == null ? "" : versionName.trim();
+        if (clean.startsWith("v") || clean.startsWith("V")) {
+            clean = clean.substring(1);
+        }
+        String[] parts = clean.split("[^0-9]+");
+        int count = 0;
+        for (String part : parts) {
+            if (!part.isEmpty()) {
+                count++;
+            }
+        }
+        int[] numbers = new int[count];
+        int index = 0;
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            try {
+                numbers[index++] = Integer.parseInt(part);
+            } catch (NumberFormatException ex) {
+                numbers[index - 1] = 0;
+            }
+        }
+        return numbers;
+    }
+
     private static File downloadApk(Context context, String downloadUrl) throws IOException {
         File updateDir = new File(context.getCacheDir(), "updates");
         if (!updateDir.exists() && !updateDir.mkdirs()) {
@@ -233,11 +350,28 @@ public final class GitHubReleaseUpdater {
         activity.runOnUiThread(() -> callback.onStatus(message));
     }
 
+    private static void postStatus(Activity activity, CheckCallback callback, String message) {
+        activity.runOnUiThread(() -> callback.onStatus(message));
+    }
+
+    private static void postChecked(
+            Activity activity,
+            CheckCallback callback,
+            UpdateCandidate candidate,
+            boolean updateAvailable
+    ) {
+        activity.runOnUiThread(() -> callback.onChecked(candidate, updateAvailable));
+    }
+
     private static void postDownloaded(Activity activity, Callback callback, File apkFile, String releaseLabel) {
         activity.runOnUiThread(() -> callback.onDownloaded(apkFile, releaseLabel));
     }
 
     private static void postError(Activity activity, Callback callback, String message) {
+        activity.runOnUiThread(() -> callback.onError(message));
+    }
+
+    private static void postError(Activity activity, CheckCallback callback, String message) {
         activity.runOnUiThread(() -> callback.onError(message));
     }
 }

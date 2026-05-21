@@ -101,11 +101,11 @@ powershell -ExecutionPolicy Bypass -File tools\build-test-apks.ps1
 `tools\build-test-apks.ps1`는 현재 패키지 APK와 레거시 패키지 제거용 APK를 `dist\`에 복사하고 SHA256을 출력한다. 산출 APK를 확인할 때는:
 
 ```powershell
-& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk
+& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk
 $env:JAVA_HOME = "C:\Users\yadia\AppData\Local\Programs\Rider\jbr"
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk
-Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.35.apk
+& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk
+Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.36.apk
 ```
 
 실기기 설치는 기기가 `adb devices`에 잡힌 뒤:
@@ -159,7 +159,9 @@ powershell -ExecutionPolicy Bypass -File tools\install-current.ps1 -RemoveLegacy
   - 파란 면은 실제 키 영역, 빨간 선/면은 현재 설정값 기준 터치 인식 영역이다.
   - 히트박스 슬라이더를 움직이면 프리뷰가 즉시 다시 그려진다.
 - 2026-05-21에 업데이트 메뉴를 추가했다.
-  - 설정 화면의 GitHub 릴리즈 설치 항목이 `yadiate/YoonKeyboard` 최신 GitHub Release에서 현재 패키지 APK를 내려받는다.
+  - 설정 화면의 버전 확인 항목이 `yadiate/YoonKeyboard` 최신 GitHub Release와 현재 버전을 비교한다.
+  - 새 버전이 있을 때만 아래 업데이트 다운로드 항목이 연한 글씨에서 활성 상태로 바뀐다.
+  - 최신 버전이면 `최신버전입니다!` 토스트를 짧게 보여준다.
   - 다운로드 후 Android 패키지 설치 화면을 열고, Android 8 이상에서는 필요 시 알 수 없는 앱 설치 권한 화면을 먼저 연다.
 - 개인정보 이슈 때문에 비밀번호 문구 저장 기능은 구현하지 않았다.
 
@@ -207,8 +209,8 @@ app\build\outputs\bundle\release\app-release.aab
 
 - applicationId: `com.yadiate.yoonkeyboard`
 - namespace: `com.yadiate.yoonkeyboard`
-- versionCode: `37`
-- versionName: `0.2.35`
+- versionCode: `38`
+- versionName: `0.2.36`
 - minSdk: `21`
 - targetSdk: `35`
 - compileSdk: `35`
@@ -216,7 +218,7 @@ app\build\outputs\bundle\release\app-release.aab
 현재 APK SHA256:
 
 ```text
-56C7B064FE261DCD2EDB38D294BE86A0902AC3654A4A0BB802F89AF3F0C7038F
+AA3ABD61D4E0983DFF0D04E33C05ACE5644FD7AB5705254DB0F561FFEF1518F0
 ```
 
 ## 최근 검증

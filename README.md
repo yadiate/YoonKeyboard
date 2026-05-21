@@ -23,7 +23,7 @@ Clean-room Android keyboard prototype based on the feature shape of the provided
 - Hangul syllable composer with basic final consonant and compound final handling.
 - English, symbol, and number modes.
 - Clipboard context panel with paste support from long-pressing the Hangul settings key.
-- GitHub Release updater that downloads the latest current-package APK and opens Android's installer.
+- GitHub Release updater that checks the latest version before enabling APK download and install.
 - Settings screen based on the analyzed APK feature set:
   - skin/theme selection
   - stroke length sensitivity
