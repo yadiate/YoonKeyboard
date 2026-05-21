@@ -1,6 +1,8 @@
 package com.yadiate.yoonkeyboard;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -28,14 +30,17 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.yadiate.yoonkeyboard.hangul.Consonant;
 import com.yadiate.yoonkeyboard.hangul.GestureCalibration;
+import com.yadiate.yoonkeyboard.hangul.CalibrationPlanner;
 
 import java.util.Arrays;
 import java.util.List;
@@ -51,18 +56,6 @@ public class MainActivity extends Activity {
             GestureCalibration.DirectionClass.TOP_LEFT,
             GestureCalibration.DirectionClass.BOTTOM_RIGHT,
             GestureCalibration.DirectionClass.BOTTOM_LEFT
-    };
-    private static final String[] CALIBRATION_SENTENCES = {
-            "가녀린 고양이는 교실 위 창가에 조용히 앉아",
-            "나무 그늘 아래 누나는 겨울 여행 이야기를 들려주어",
-            "다정한 도윤이는 마당에서 작은 유리병을 주워",
-            "라디오 소리에 루비는 놀라며 마루 위로 올라가",
-            "마을 어귀 모퉁이에는 오래된 우편함이 보여",
-            "분주한 보라는 병원 옆 식당에서 국수를 먹어",
-            "사려 깊은 수연이는 새벽에 종이를 조용히 버려",
-            "아영이는 우유와 야채를 사려고 시장으로 걸어가",
-            "자주 웃는 지우는 종이 위에 여러 가지 무늬를 그려",
-            "차가운 차창 너머로 초여름 비구름이 천천히 흘러"
     };
 
     private SharedPreferences prefs;
@@ -118,6 +111,7 @@ public class MainActivity extends Activity {
         addSystemSection();
         addKeyboardSection();
         addFeedbackSection();
+        addBackupSection();
         if (animate) {
             animatePageFrom(direction);
         }
@@ -191,6 +185,14 @@ public class MainActivity extends Activity {
         animatePageFrom(1);
     }
 
+    private void showFoldModePage() {
+        showChoicePage("\uD3F4\uB4DC \uBAA8\uB4DC",
+                SettingsStore.FOLD_KEYBOARD_MODES,
+                SettingsStore.KEY_FOLD_KEYBOARD_MODE,
+                SettingsStore.FOLD_KEYBOARD_MODE_SPLIT,
+                () -> showMainPage(true, -1));
+    }
+
     private void showStrokeLengthPage() {
         Runnable parentPage = () -> showMainPage(true, -1);
         backAction = parentPage;
@@ -204,19 +206,53 @@ public class MainActivity extends Activity {
         SettingsStore.Snapshot strokeSnapshot = SettingsStore.load(this);
         int strokeIndex = strokeSnapshot.strokeLengthIndex;
         int defaultShortStroke = SettingsStore.defaultShortStrokeMmTenths(strokeIndex);
+        int defaultDerivationShortStroke = SettingsStore.defaultDerivationShortStrokeMmTenths(strokeIndex);
         int defaultLongStroke = SettingsStore.defaultLongStrokeMmTenths(strokeIndex);
         int currentLongStroke = strokeSnapshot.longStrokeMmTenths;
         int currentShortStroke = strokeSnapshot.shortStrokeMmTenths;
+        int currentDerivationShortStroke = strokeSnapshot.derivationShortStrokeMmTenths;
         SettingsStore.putInt(this, SettingsStore.KEY_STROKE_LONG_MM_TENTHS, currentLongStroke);
         SettingsStore.putInt(this, SettingsStore.KEY_STROKE_SHORT_MM_TENTHS, currentShortStroke);
+        SettingsStore.putInt(this, SettingsStore.KEY_STROKE_DERIVATION_SHORT_MM_TENTHS,
+                currentDerivationShortStroke);
 
         final StrokeMmControl[] shortControl = new StrokeMmControl[1];
-        shortControl[0] = addStrokeMmRow(customCard, "짧은 획 길이",
-                "방향이 바뀐 것으로 인정할 최소 움직임입니다.",
+        final StrokeMmControl[] derivationShortControl = new StrokeMmControl[1];
+        shortControl[0] = addStrokeMmRow(customCard, "첫 획 길이",
+                "첫 드래그에서 ㅗ, ㅏ, ㅜ, ㅓ와 대각선을 잡는 최소 움직임입니다.",
                 SettingsStore.KEY_STROKE_SHORT_MM_TENTHS,
                 SettingsStore.MIN_CUSTOM_SHORT_MM_TENTHS,
                 SettingsStore.maxCustomShortStrokeMmTenths(currentLongStroke),
                 currentShortStroke,
+                value -> {
+                    int longStroke = SettingsStore.boundedCustomLongStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_LONG_MM_TENTHS, currentLongStroke),
+                            defaultLongStroke);
+                    int firstShortStroke = SettingsStore.boundedCustomShortStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_SHORT_MM_TENTHS, value),
+                            longStroke,
+                            defaultShortStroke);
+                    int fallback = SettingsStore.defaultDerivationShortStrokeMmTenths(
+                            defaultDerivationShortStroke, firstShortStroke, longStroke);
+                    int derivationShortStroke = SettingsStore.boundedCustomDerivationShortStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_DERIVATION_SHORT_MM_TENTHS, fallback),
+                            firstShortStroke,
+                            longStroke,
+                            fallback);
+                    if (derivationShortControl[0] != null) {
+                        derivationShortControl[0].setRangeAndValue(
+                                SettingsStore.minCustomDerivationShortStrokeMmTenths(firstShortStroke, longStroke),
+                                SettingsStore.maxCustomShortStrokeMmTenths(longStroke),
+                                derivationShortStroke);
+                    }
+                });
+        addDivider(customCard);
+        derivationShortControl[0] = addStrokeMmRow(customCard, "파생 획 길이",
+                "2차 이후 꺾임과 복합 모음을 인정할 최소 움직임입니다.",
+                SettingsStore.KEY_STROKE_DERIVATION_SHORT_MM_TENTHS,
+                SettingsStore.minCustomDerivationShortStrokeMmTenths(currentShortStroke, currentLongStroke),
+                SettingsStore.maxCustomShortStrokeMmTenths(currentLongStroke),
+                currentDerivationShortStroke,
                 null);
         addDivider(customCard);
         addStrokeMmRow(customCard, "긴 획 길이",
@@ -233,11 +269,24 @@ public class MainActivity extends Activity {
                             prefs.getInt(SettingsStore.KEY_STROKE_SHORT_MM_TENTHS, defaultShortStroke),
                             longStroke,
                             defaultShortStroke);
+                    int fallback = SettingsStore.defaultDerivationShortStrokeMmTenths(
+                            defaultDerivationShortStroke, shortStroke, longStroke);
+                    int derivationShortStroke = SettingsStore.boundedCustomDerivationShortStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_DERIVATION_SHORT_MM_TENTHS, fallback),
+                            shortStroke,
+                            longStroke,
+                            fallback);
                     if (shortControl[0] != null) {
                         shortControl[0].setRangeAndValue(
                                 SettingsStore.MIN_CUSTOM_SHORT_MM_TENTHS,
                                 SettingsStore.maxCustomShortStrokeMmTenths(longStroke),
                                 shortStroke);
+                    }
+                    if (derivationShortControl[0] != null) {
+                        derivationShortControl[0].setRangeAndValue(
+                                SettingsStore.minCustomDerivationShortStrokeMmTenths(shortStroke, longStroke),
+                                SettingsStore.maxCustomShortStrokeMmTenths(longStroke),
+                                derivationShortStroke);
                     }
                 });
         animatePageFrom(1);
@@ -267,6 +316,88 @@ public class MainActivity extends Activity {
                 SettingsStore.MAX_DELETE_REPEAT_INTERVAL_MS,
                 SettingsStore.DELETE_REPEAT_INTERVAL_STEP_MS,
                 snapshot.deleteRepeatIntervalMs);
+        animatePageFrom(1);
+    }
+
+    private void showDoubleConsonantPage() {
+        Runnable parentPage = () -> showMainPage(true, -1);
+        backAction = parentPage;
+        root.removeAllViews();
+        addDetailHeader("쌍자음", parentPage);
+
+        addSectionTitle("대기시간");
+        LinearLayout card = addCard();
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        addDoubleTapTimeoutMsRow(card, "쌍자음 입력 대기시간",
+                "같은 자음을 이 시간 안에 다시 누를 때만 ㄲ, ㄸ, ㅃ, ㅆ, ㅉ로 바꿉니다.",
+                snapshot.doubleTapTimeoutMs);
+        animatePageFrom(1);
+    }
+
+    private void showTypoGuardPage() {
+        Runnable parentPage = () -> showMainPage(true, -1);
+        backAction = parentPage;
+        root.removeAllViews();
+        addDetailHeader("\uC624\uD0C0\uB9C9\uAE30", parentPage);
+
+        addSectionTitle("\uBAA8\uC74C \uC81C\uC2A4\uCC98");
+        LinearLayout card = addCard();
+        addCheckRow(card,
+                "\u3155 \uC704\uB85C\uD558\uBA74\u3156 \uB9C9\uAE30",
+                "\u3155\uC5D0\uC11C \uC704\uB85C \uD68D\uC744 \uB354 \uADF8\uC5C8\uC744 \uB54C \u3156\uB85C \uBC14\uB00C\uB294 \uAC83\uC744 \uB9C9\uC2B5\uB2C8\uB2E4. \uC544\uB798\uB85C \uB0B4\uB824 \u3156\uB97C \uB9CC\uB4DC\uB294 \uB3D9\uC791\uC740 \uC720\uC9C0\uD569\uB2C8\uB2E4.",
+                SettingsStore.KEY_BLOCK_YEO_UP_TO_YE,
+                true);
+        animatePageFrom(1);
+    }
+
+    private void showHitboxPage() {
+        Runnable parentPage = () -> showMainPage(true, -1);
+        backAction = parentPage;
+        root.removeAllViews();
+        addDetailHeader("터치 판정", parentPage);
+
+        addSectionTitle("미리보기");
+        HitboxPreviewView previewView = new HitboxPreviewView(this);
+        LinearLayout.LayoutParams previewParams = matchWrap();
+        previewParams.setMargins(0, dp(2), 0, dp(8));
+        root.addView(previewView, previewParams);
+        TextView previewHint = rowSummary("파란 면이 실제 키이고, 빨간 선/면이 터치 인식 영역입니다.");
+        previewHint.setPadding(dp(4), 0, dp(4), dp(8));
+        root.addView(previewHint, matchWrap());
+
+        addSectionTitle("히트박스");
+        LinearLayout card = addCard();
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        addHitboxDpRow(card, "기본 여유",
+                "모든 키의 오른쪽과 아래쪽으로 기본 판정을 넓힙니다.",
+                SettingsStore.KEY_HITBOX_BASE_DP, snapshot.hitboxBaseDp, previewView);
+        addDivider(card);
+        addHitboxDpRow(card, "좌측 축소",
+                "키의 왼쪽 판정을 안쪽으로 줄입니다.",
+                SettingsStore.KEY_HITBOX_LEFT_CUT_DP, snapshot.hitboxLeftCutDp, previewView);
+        addDivider(card);
+        addHitboxDpRow(card, "상단 축소",
+                "키의 위쪽 판정을 안쪽으로 줄입니다.",
+                SettingsStore.KEY_HITBOX_TOP_CUT_DP, snapshot.hitboxTopCutDp, previewView);
+        addDivider(card);
+        addHitboxDpRow(card, "우측 추가",
+                "키의 오른쪽 판정을 더 넓힙니다.",
+                SettingsStore.KEY_HITBOX_RIGHT_EXTRA_DP, snapshot.hitboxRightExtraDp, previewView);
+        addDivider(card);
+        addHitboxDpRow(card, "하단 추가",
+                "키의 아래쪽 판정을 더 넓힙니다.",
+                SettingsStore.KEY_HITBOX_BOTTOM_EXTRA_DP, snapshot.hitboxBottomExtraDp, previewView);
+        addDivider(card);
+        addHitboxDpRow(card, "왼쪽 키 보정",
+                "왼쪽 키들이 오른쪽 방향 터치를 더 가져가게 합니다.",
+                SettingsStore.KEY_HITBOX_LEFT_KEY_RIGHT_EXTRA_DP, snapshot.hitboxLeftKeyRightExtraDp, previewView);
+
+        addSectionTitle("초기화");
+        LinearLayout resetCard = addCard();
+        addActionRow(resetCard, "기본값 복원", hitboxSummary(), () -> {
+            SettingsStore.resetHitbox(this);
+            showHitboxPage();
+        });
         animatePageFrom(1);
     }
 
@@ -346,10 +477,10 @@ public class MainActivity extends Activity {
         addSectionTitle("개인 맞춤");
         LinearLayout card = addCard();
         addSwitchRow(card, "보정 사용", "수집한 손 움직임으로 대각선과 긴 획을 판단합니다.",
-                SettingsStore.KEY_GESTURE_CALIBRATION_ENABLED, false);
+                SettingsStore.KEY_GESTURE_CALIBRATION_ENABLED, true);
         addDivider(card);
-        addActionRow(card, "보정 시작", "문장을 따라 치다가 충분하면 중간에 바로 완성할 수 있습니다.",
-                this::showCalibrationPracticePage);
+        addActionRow(card, "보정 시작", "오타나는 글자를 넣으면 목표 글자와 간섭 글자를 자동으로 만듭니다.",
+                this::showCalibrationTargetPage);
         addDivider(card);
         addActionRow(card, "보정값 초기화", "저장된 대각선과 긴 획 기준을 지웁니다.", () -> {
             SettingsStore.clearGestureCalibration(this);
@@ -390,14 +521,16 @@ public class MainActivity extends Activity {
         float fallbackShortMm = snapshot.shortStrokeMm();
         float fallbackLongMm = snapshot.longStrokeMm();
         Consonant initialConsonant = Consonant.GIYEOK;
+        String initialCalibrationKey = calibrationKeyForConsonant(initialConsonant, snapshot.hangulTypeIndex);
         CalibrationAngleEditorView angleView = new CalibrationAngleEditorView(this, editProfile[0],
-                initialConsonant, fallbackShortMm, fallbackLongMm, null);
+                initialConsonant, initialCalibrationKey, fallbackShortMm, fallbackLongMm, null);
         CalibrationKeyboardPickerView keyboardPickerView = new CalibrationKeyboardPickerView(this, editProfile[0],
-                initialConsonant, angleView.selectedDirection, (consonant, cycleDirection) -> {
+                initialConsonant, initialCalibrationKey, angleView.selectedDirection, snapshot.hangulTypeIndex,
+                (consonant, calibrationKey, cycleDirection) -> {
             if (cycleDirection) {
                 angleView.selectNextDirection();
             }
-            angleView.setSelectedConsonant(consonant);
+            angleView.setSelectedKey(consonant, calibrationKey);
         });
         angleView.setKeyboardPickerView(keyboardPickerView);
 
@@ -410,8 +543,8 @@ public class MainActivity extends Activity {
         defaultRow.setOrientation(LinearLayout.HORIZONTAL);
         defaultRow.setGravity(Gravity.CENTER);
         addCalibrationActionButton(defaultRow, "개별 미설정 기본값", true, false, () -> {
-            angleView.setSelectedConsonant(null);
-            keyboardPickerView.setSelection(null, angleView.selectedDirection);
+            angleView.setSelectedKey(null, "");
+            keyboardPickerView.setSelection(null, "", angleView.selectedDirection);
         });
         LinearLayout.LayoutParams defaultParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -501,11 +634,98 @@ public class MainActivity extends Activity {
         return GestureCalibration.Profile.fromJson(profile.toJson());
     }
 
-    private void showCalibrationPracticePage() {
+    private void showCalibrationTargetPage() {
+        SettingsStore.endGestureCalibrationSession(this);
+        hideSoftKeyboardFromCurrentFocus();
         Runnable parentPage = this::showCalibrationPage;
         backAction = parentPage;
         root.removeAllViews();
         addDetailHeader("보정 시작", parentPage);
+
+        addSectionTitle("오타나는 글자");
+        LinearLayout card = addCard();
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(16), dp(18), dp(18));
+        card.addView(content, matchWrap());
+
+        TextView description = rowSummary("예: 현이 자꾸 틀리면 현을 입력하세요. 앱이 현 10번, 혀 5번, 허 5번, 호 5번처럼 필요한 비교 글자를 자동으로 만듭니다.");
+        description.setPadding(0, 0, 0, dp(12));
+        content.addView(description, matchWrap());
+
+        EditText targetInput = new EditText(this);
+        targetInput.setTextSize(24);
+        targetInput.setTextColor(TEXT_PRIMARY);
+        targetInput.setHintTextColor(Color.rgb(170, 174, 182));
+        targetInput.setHint("예: 현");
+        targetInput.setSingleLine(true);
+        targetInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        targetInput.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        targetInput.setMinHeight(dp(64));
+        targetInput.setGravity(Gravity.CENTER_VERTICAL);
+        targetInput.setPadding(dp(16), dp(10), dp(16), dp(10));
+        targetInput.setBackground(rounded(Color.rgb(247, 248, 250), 16));
+        content.addView(targetInput, matchWrap());
+
+        TextView planPreview = rowSummary("보정 계획이 여기에 표시됩니다.");
+        planPreview.setPadding(0, dp(12), 0, 0);
+        content.addView(planPreview, matchWrap());
+
+        targetInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                updateCalibrationPlanPreview(s.toString(), planPreview);
+            }
+        });
+        updateCalibrationPlanPreview(targetInput.getText().toString(), planPreview);
+
+        LinearLayout actionRow = new LinearLayout(this);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionRow.setGravity(Gravity.CENTER);
+        addCalibrationActionButton(actionRow, "입력 보정 시작", true, true, () -> {
+            try {
+                CalibrationPlanner.Plan plan = CalibrationPlanner.build(targetInput.getText().toString());
+                showCalibrationPracticePage(plan);
+            } catch (IllegalArgumentException ex) {
+                planPreview.setText("한글 완성 글자 한 개를 입력하세요. 예: 현");
+                planPreview.setTextColor(Color.rgb(180, 80, 48));
+            }
+        });
+        LinearLayout.LayoutParams actionParams = matchWrap();
+        actionParams.setMargins(0, dp(12), 0, dp(12));
+        root.addView(actionRow, actionParams);
+
+        animatePageFrom(1);
+        targetInput.postDelayed(() -> {
+            targetInput.requestFocus();
+            showSoftKeyboard(targetInput);
+        }, 220);
+    }
+
+    private void updateCalibrationPlanPreview(String text, TextView preview) {
+        try {
+            CalibrationPlanner.Plan plan = CalibrationPlanner.build(text);
+            preview.setText("계획: " + plan.summary());
+            preview.setTextColor(TEXT_SECONDARY);
+        } catch (IllegalArgumentException ex) {
+            preview.setText("오타나는 한글 한 글자를 입력하면 계획을 만듭니다.");
+            preview.setTextColor(TEXT_SECONDARY);
+        }
+    }
+
+    private void showCalibrationPracticePage(CalibrationPlanner.Plan plan) {
+        Runnable parentPage = this::showCalibrationTargetPage;
+        backAction = parentPage;
+        root.removeAllViews();
+        addDetailHeader("보정 입력", parentPage);
 
         CalibrationProgressView progressView = new CalibrationProgressView(this);
         LinearLayout.LayoutParams progressParams = matchWrap();
@@ -537,11 +757,12 @@ public class MainActivity extends Activity {
         inputParams.setMargins(0, 0, 0, dp(10));
         root.addView(inputView, inputParams);
 
-        TextView hintView = rowSummary("입력한 획을 그대로 보정에 반영합니다. 줄 끝까지 치면 다음 줄로 넘어갑니다.");
+        TextView hintView = rowSummary("틀리게 입력해도 경고하지 않고 그 획을 그대로 의도 글자의 샘플로 저장합니다.");
         hintView.setPadding(dp(4), 0, dp(4), dp(12));
         root.addView(hintView, matchWrap());
 
-        ActualCalibrationSession session = new ActualCalibrationSession(progressView, promptView, inputView, hintView);
+        ActualCalibrationSession session = new ActualCalibrationSession(plan, progressView, promptView, inputView,
+                hintView);
         LinearLayout actionRow = new LinearLayout(this);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.setGravity(Gravity.CENTER);
@@ -575,7 +796,7 @@ public class MainActivity extends Activity {
         LinearLayout card = addCard();
         addMenuRow(card, "학습된 획", sampleCount + "개", false);
         addDivider(card);
-        addActionRow(card, "다시 보정", "문장을 다시 입력해 기준을 새로 만듭니다.", this::showCalibrationPracticePage);
+        addActionRow(card, "다시 보정", "오타나는 글자를 다시 고르고 기준을 새로 만듭니다.", this::showCalibrationTargetPage);
         addDivider(card);
         addActionRow(card, "설정으로 돌아가기", "보정 메뉴로 돌아갑니다.", this::showCalibrationPage);
         animatePageFrom(1);
@@ -633,13 +854,20 @@ public class MainActivity extends Activity {
     private void addKeyboardSection() {
         addSectionTitle("자판");
         LinearLayout card = addCard();
-        addChoiceRow(card, "스킨", SettingsStore.SKINS, SettingsStore.KEY_SKIN, 0,
+        addChoiceRow(card, "스킨", SettingsStore.SKINS, SettingsStore.KEY_SKIN, SettingsStore.SKIN_DARK,
                 () -> showMainPage(true, -1));
         addDivider(card);
         addChoiceRow(card, "자음 레이아웃", SettingsStore.HANGUL_TYPES, SettingsStore.KEY_HANGUL_TYPE,
-                SettingsStore.HANGUL_LAYOUT_YUN, () -> showMainPage(true, -1));
+                SettingsStore.HANGUL_LAYOUT_TWO_BEOLSIK, () -> showMainPage(true, -1));
+        if (SettingsStore.isFoldPhone(this)) {
+            addDivider(card);
+            addFoldModeRow(card);
+        }
         addDivider(card);
         addKeyboardSizeRow(card);
+        addDivider(card);
+        addSwitchRow(card, "Debug", "Show hit boxes and touch points on the keyboard.",
+                SettingsStore.KEY_DEBUG_TOUCH_OVERLAY, false);
     }
 
     private void addFeedbackSection() {
@@ -647,10 +875,13 @@ public class MainActivity extends Activity {
         LinearLayout card = addCard();
         addStrokeLengthRow(card);
         addDivider(card);
+        addTypoGuardRow(card);
+        addDivider(card);
         addCalibrationRow(card);
         addDivider(card);
-        addChoiceRow(card, "쌍자음 입력 시간", SettingsStore.DOUBLE_TAP_TIMES,
-                SettingsStore.KEY_DOUBLE_TAP_TIME, 1, () -> showMainPage(true, -1));
+        addHitboxRow(card);
+        addDivider(card);
+        addDoubleConsonantRow(card);
         addDivider(card);
         addDeleteRepeatRow(card);
 
@@ -661,6 +892,61 @@ public class MainActivity extends Activity {
         addInlineVibrateProgressRow(feedbackCard);
         addDivider(feedbackCard);
         addSwitchRow(feedbackCard, "소리", "키 입력음을 재생합니다.", SettingsStore.KEY_SOUND_ON, false);
+    }
+
+    private void addBackupSection() {
+        addSectionTitle("\uC635\uC158 \uBC31\uC5C5");
+        LinearLayout card = addCard();
+        addActionRow(card,
+                "\uC635\uC158 \uC800\uC7A5",
+                "\uD604\uC7AC \uC635\uC158\uC744 \uD074\uB9BD\uBCF4\uB4DC\uC5D0 \uBCF5\uC0AC\uD569\uB2C8\uB2E4.",
+                this::saveOptionsToClipboard);
+        addDivider(card);
+        addActionRow(card,
+                "\uC635\uC158 \uBD88\uB7EC\uC624\uAE30",
+                "\uD074\uB9BD\uBCF4\uB4DC\uC758 \uC635\uC158\uAC12\uC744 \uBCF5\uC6D0\uD569\uB2C8\uB2E4.",
+                this::loadOptionsFromClipboard);
+    }
+
+    private void saveOptionsToClipboard() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            showToast("\uD074\uB9BD\uBCF4\uB4DC\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+            return;
+        }
+        String exportText = SettingsStore.exportOptions(this);
+        clipboard.setPrimaryClip(ClipData.newPlainText("YoonKeyboard options", exportText));
+        showToast("\uC635\uC158\uC744 \uD074\uB9BD\uBCF4\uB4DC\uC5D0 \uC800\uC7A5\uD588\uC2B5\uB2C8\uB2E4.");
+    }
+
+    private void loadOptionsFromClipboard() {
+        CharSequence text = clipboardText();
+        if (text == null || text.toString().trim().isEmpty()) {
+            showToast("\uD074\uB9BD\uBCF4\uB4DC\uC5D0 \uBD88\uB7EC\uC62C \uC635\uC158\uAC12\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+            return;
+        }
+        try {
+            SettingsStore.importOptions(this, text.toString());
+            prefs = SettingsStore.prefs(this);
+            showMainPage(true, -1);
+            showToast("\uC635\uC158\uC744 \uBCF5\uC6D0\uD588\uC2B5\uB2C8\uB2E4.");
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            showToast("\uD074\uB9BD\uBCF4\uB4DC\uC758 \uC635\uC158\uAC12\uC744 \uC77D\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+        }
+    }
+
+    private CharSequence clipboardText() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null || !clipboard.hasPrimaryClip() || clipboard.getPrimaryClip() == null
+                || clipboard.getPrimaryClip().getItemCount() <= 0) {
+            return null;
+        }
+        ClipData.Item item = clipboard.getPrimaryClip().getItemAt(0);
+        return item == null ? null : item.coerceToText(this);
+    }
+
+    private void showToast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }
 
     private void addSectionTitle(String text) {
@@ -750,16 +1036,40 @@ public class MainActivity extends Activity {
         row.setOnClickListener(v -> showStrokeLengthPage());
     }
 
+    private void addTypoGuardRow(LinearLayout card) {
+        TextView summary = addMenuRow(card, "\uC624\uD0C0\uB9C9\uAE30", typoGuardSummary(), true);
+        View row = (View) summary.getTag();
+        row.setOnClickListener(v -> showTypoGuardPage());
+    }
+
     private void addKeyboardSizeRow(LinearLayout card) {
         TextView summary = addMenuRow(card, "크기 조절", keyboardSizeSummary(), true);
         View row = (View) summary.getTag();
         row.setOnClickListener(v -> showKeyboardSizePage());
     }
 
+    private void addFoldModeRow(LinearLayout card) {
+        TextView summary = addMenuRow(card, "\uD3F4\uB4DC \uBAA8\uB4DC", foldModeSummary(), true);
+        View row = (View) summary.getTag();
+        row.setOnClickListener(v -> showFoldModePage());
+    }
+
     private void addCalibrationRow(LinearLayout card) {
         TextView summary = addMenuRow(card, "보정", calibrationSummary(), true);
         View row = (View) summary.getTag();
         row.setOnClickListener(v -> showCalibrationPage());
+    }
+
+    private void addHitboxRow(LinearLayout card) {
+        TextView summary = addMenuRow(card, "터치 판정", hitboxSummary(), true);
+        View row = (View) summary.getTag();
+        row.setOnClickListener(v -> showHitboxPage());
+    }
+
+    private void addDoubleConsonantRow(LinearLayout card) {
+        TextView summary = addMenuRow(card, "쌍자음 대기시간", doubleConsonantSummary(), true);
+        View row = (View) summary.getTag();
+        row.setOnClickListener(v -> showDoubleConsonantPage());
     }
 
     private void addDeleteRepeatRow(LinearLayout card) {
@@ -830,6 +1140,26 @@ public class MainActivity extends Activity {
         row.addView(toggle, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         row.setOnClickListener(v -> toggle.setChecked(!toggle.isChecked()));
+        card.addView(row, matchWrap());
+    }
+
+    private void addCheckRow(LinearLayout card, String title, String summary, String key, boolean defaultValue) {
+        LinearLayout row = rowContainer();
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setGravity(Gravity.CENTER_VERTICAL);
+        texts.addView(rowTitle(title), matchWrap());
+        texts.addView(rowSummary(summary), matchWrap());
+        row.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        CheckBox checkBox = new CheckBox(this);
+        checkBox.setChecked(prefs.getBoolean(key, defaultValue));
+        checkBox.setOnCheckedChangeListener((buttonView, isChecked) ->
+                SettingsStore.putBoolean(this, key, isChecked));
+        row.addView(checkBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.setOnClickListener(v -> checkBox.setChecked(!checkBox.isChecked()));
         card.addView(row, matchWrap());
     }
 
@@ -912,6 +1242,23 @@ public class MainActivity extends Activity {
                             SettingsStore.defaultLongStrokeMmTenths(strokeIndex));
                     savedValue = SettingsStore.boundedCustomShortStrokeMmTenths(savedValue, longStroke,
                             SettingsStore.defaultShortStrokeMmTenths(strokeIndex));
+                } else if (SettingsStore.KEY_STROKE_DERIVATION_SHORT_MM_TENTHS.equals(key)) {
+                    int strokeIndex = currentIndex(SettingsStore.KEY_STROKE_LENGTH, SettingsStore.STROKE_LENGTHS, 2);
+                    int longStroke = SettingsStore.boundedCustomLongStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_LONG_MM_TENTHS,
+                                    SettingsStore.defaultLongStrokeMmTenths(strokeIndex)),
+                            SettingsStore.defaultLongStrokeMmTenths(strokeIndex));
+                    int firstShortStroke = SettingsStore.boundedCustomShortStrokeMmTenths(
+                            prefs.getInt(SettingsStore.KEY_STROKE_SHORT_MM_TENTHS,
+                                    SettingsStore.defaultShortStrokeMmTenths(strokeIndex)),
+                            longStroke,
+                            SettingsStore.defaultShortStrokeMmTenths(strokeIndex));
+                    int fallback = SettingsStore.defaultDerivationShortStrokeMmTenths(
+                            SettingsStore.defaultDerivationShortStrokeMmTenths(strokeIndex),
+                            firstShortStroke,
+                            longStroke);
+                    savedValue = SettingsStore.boundedCustomDerivationShortStrokeMmTenths(savedValue,
+                            firstShortStroke, longStroke, fallback);
                 } else if (SettingsStore.KEY_STROKE_LONG_MM_TENTHS.equals(key)) {
                     int strokeIndex = currentIndex(SettingsStore.KEY_STROKE_LENGTH, SettingsStore.STROKE_LENGTHS, 2);
                     savedValue = SettingsStore.boundedCustomLongStrokeMmTenths(savedValue,
@@ -984,6 +1331,113 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void addDoubleTapTimeoutMsRow(LinearLayout card, String title, String description, int currentMs) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(14), dp(18), dp(16));
+
+        LinearLayout topLine = new LinearLayout(this);
+        topLine.setOrientation(LinearLayout.HORIZONTAL);
+        topLine.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView titleView = rowTitle(title);
+        topLine.addView(titleView, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        TextView valueView = rowTitle("");
+        valueView.setGravity(Gravity.END);
+        topLine.addView(valueView, new LinearLayout.LayoutParams(dp(82),
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        content.addView(topLine, matchWrap());
+
+        TextView descriptionView = rowSummary(description);
+        descriptionView.setPadding(0, dp(4), 0, dp(8));
+        content.addView(descriptionView, matchWrap());
+
+        int minMs = SettingsStore.MIN_DOUBLE_TAP_TIMEOUT_MS;
+        int maxMs = SettingsStore.MAX_DOUBLE_TAP_TIMEOUT_MS;
+        int stepMs = SettingsStore.DOUBLE_TAP_TIMEOUT_STEP_MS;
+        int safeValue = SettingsStore.boundedDoubleTapTimeoutMs(currentMs);
+        SeekBar seekBar = new SeekBar(this);
+        seekBar.setMax((maxMs - minMs) / stepMs);
+        seekBar.setProgress(doubleTapTimeoutSeekProgress(safeValue));
+        content.addView(seekBar, matchWrap());
+        card.addView(content, matchWrap());
+
+        updateDoubleTapTimeoutMsText(valueView, doubleTapTimeoutSeekValue(seekBar.getProgress()));
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int value = doubleTapTimeoutSeekValue(progress);
+                SettingsStore.putInt(MainActivity.this, SettingsStore.KEY_DOUBLE_TAP_TIMEOUT_MS, value);
+                updateDoubleTapTimeoutMsText(valueView, SettingsStore.boundedDoubleTapTimeoutMs(value));
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+    }
+
+    private void addHitboxDpRow(LinearLayout card, String title, String description, String key, int currentDp,
+                                HitboxPreviewView previewView) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(14), dp(18), dp(16));
+
+        LinearLayout topLine = new LinearLayout(this);
+        topLine.setOrientation(LinearLayout.HORIZONTAL);
+        topLine.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView titleView = rowTitle(title);
+        topLine.addView(titleView, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        TextView valueView = rowTitle("");
+        valueView.setGravity(Gravity.END);
+        topLine.addView(valueView, new LinearLayout.LayoutParams(dp(72),
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        content.addView(topLine, matchWrap());
+
+        TextView descriptionView = rowSummary(description);
+        descriptionView.setPadding(0, dp(4), 0, dp(8));
+        content.addView(descriptionView, matchWrap());
+
+        int minDp = SettingsStore.hitboxMinDp(key);
+        int maxDp = SettingsStore.hitboxMaxDp(key);
+        int safeValue = SettingsStore.boundedHitboxDp(key, currentDp);
+        SeekBar seekBar = new SeekBar(this);
+        seekBar.setMax(maxDp - minDp);
+        seekBar.setProgress(safeValue - minDp);
+        content.addView(seekBar, matchWrap());
+        card.addView(content, matchWrap());
+
+        updateHitboxDpText(valueView, safeValue);
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int value = SettingsStore.boundedHitboxDp(key, minDp + progress);
+                SettingsStore.putInt(MainActivity.this, key, value);
+                updateHitboxDpText(valueView, value);
+                if (previewView != null) {
+                    previewView.invalidate();
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+    }
+
     private void updateProgressText(int progress, String[] values, TextView valueText, TextView description) {
         valueText.setText(values[progress]);
         description.setText(vibrateDescription(progress));
@@ -1004,8 +1458,22 @@ public class MainActivity extends Activity {
 
     private String strokeLengthSummary() {
         SettingsStore.Snapshot snapshot = SettingsStore.load(this);
-        return "짧은 " + SettingsStore.strokeMmLabel(snapshot.shortStrokeMmTenths)
+        return "첫 " + SettingsStore.strokeMmLabel(snapshot.shortStrokeMmTenths)
+                + " · 파생 " + SettingsStore.strokeMmLabel(snapshot.derivationShortStrokeMmTenths)
                 + " · 긴 " + SettingsStore.strokeMmLabel(snapshot.longStrokeMmTenths);
+    }
+
+    private String typoGuardSummary() {
+        return prefs.getBoolean(SettingsStore.KEY_BLOCK_YEO_UP_TO_YE, true)
+                ? "\u3155 \uC704\u2192\u3156 \uCC28\uB2E8"
+                : "\uAEBC\uC9D0";
+    }
+
+    private String foldModeSummary() {
+        int mode = currentIndex(SettingsStore.KEY_FOLD_KEYBOARD_MODE,
+                SettingsStore.FOLD_KEYBOARD_MODES,
+                SettingsStore.FOLD_KEYBOARD_MODE_SPLIT);
+        return SettingsStore.FOLD_KEYBOARD_MODES[mode];
     }
 
     private int deleteRepeatSeekProgress(int value, int minMs, int stepMs) {
@@ -1014,6 +1482,18 @@ public class MainActivity extends Activity {
 
     private int deleteRepeatSeekValue(int progress, int minMs, int maxMs, int stepMs) {
         int value = minMs + progress * stepMs;
+        return Math.max(minMs, Math.min(value, maxMs));
+    }
+
+    private int doubleTapTimeoutSeekProgress(int value) {
+        int minMs = SettingsStore.MIN_DOUBLE_TAP_TIMEOUT_MS;
+        return Math.max(0, Math.round((value - minMs) / (float) SettingsStore.DOUBLE_TAP_TIMEOUT_STEP_MS));
+    }
+
+    private int doubleTapTimeoutSeekValue(int progress) {
+        int minMs = SettingsStore.MIN_DOUBLE_TAP_TIMEOUT_MS;
+        int maxMs = SettingsStore.MAX_DOUBLE_TAP_TIMEOUT_MS;
+        int value = minMs + progress * SettingsStore.DOUBLE_TAP_TIMEOUT_STEP_MS;
         return Math.max(minMs, Math.min(value, maxMs));
     }
 
@@ -1026,6 +1506,19 @@ public class MainActivity extends Activity {
 
     private void updateDeleteRepeatMsText(TextView valueText, int ms) {
         valueText.setText(ms + "ms");
+    }
+
+    private void updateDoubleTapTimeoutMsText(TextView valueText, int ms) {
+        valueText.setText(ms + "ms");
+    }
+
+    private void updateHitboxDpText(TextView valueText, int valueDp) {
+        valueText.setText(valueDp + "dp");
+    }
+
+    private String doubleConsonantSummary() {
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        return snapshot.doubleTapTimeoutMs + "ms 안에 두 번 누를 때만 변환";
     }
 
     private String deleteRepeatSummary() {
@@ -1041,6 +1534,14 @@ public class MainActivity extends Activity {
                 + snapshot.keyboardLayoutLeftPercent + "/"
                 + (snapshot.keyboardLayoutRightPercent - snapshot.keyboardLayoutLeftPercent) + "/"
                 + (100 - snapshot.keyboardLayoutRightPercent);
+    }
+
+    private String hitboxSummary() {
+        SettingsStore.Snapshot snapshot = SettingsStore.load(this);
+        return "기본 " + snapshot.hitboxBaseDp + "dp · 좌/상 "
+                + snapshot.hitboxLeftCutDp + "/" + snapshot.hitboxTopCutDp
+                + "dp · 우/하 +" + snapshot.hitboxRightExtraDp + "/+"
+                + snapshot.hitboxBottomExtraDp + "dp";
     }
 
     private String calibrationSummary() {
@@ -1143,30 +1644,195 @@ public class MainActivity extends Activity {
         });
     }
 
-    private int totalCalibrationCharacters() {
-        int total = 0;
-        for (String sentence : CALIBRATION_SENTENCES) {
-            total += sentence.length();
-        }
-        return total;
-    }
+    private class HitboxPreviewView extends View {
+        private final Paint previewPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF keyboardRect = new RectF();
+        private final java.util.ArrayList<HitboxCell> cells = new java.util.ArrayList<>();
 
-    private int calibrationCharactersBeforeLine(int lineIndex) {
-        int total = 0;
-        for (int i = 0; i < lineIndex && i < CALIBRATION_SENTENCES.length; i++) {
-            total += CALIBRATION_SENTENCES[i].length();
+        HitboxPreviewView(Context context) {
+            super(context);
+            setMinimumHeight(dp(260));
         }
-        return total;
-    }
 
-    private int matchingPrefixLength(String expected, String actual) {
-        int count = Math.min(expected.length(), actual.length());
-        for (int i = 0; i < count; i++) {
-            if (expected.charAt(i) != actual.charAt(i)) {
-                return i;
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int width = MeasureSpec.getSize(widthMeasureSpec);
+            setMeasuredDimension(width, dp(260));
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            SettingsStore.Snapshot snapshot = SettingsStore.load(MainActivity.this);
+            SettingsStore.KeyboardTheme theme = snapshot.theme;
+            buildHitboxCells(snapshot);
+
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(theme.background);
+            canvas.drawRoundRect(keyboardRect, dp(12), dp(12), previewPaint);
+
+            for (HitboxCell cell : cells) {
+                drawHitboxFill(canvas, cell);
+            }
+            for (HitboxCell cell : cells) {
+                drawHitboxKey(canvas, cell, theme);
+            }
+            for (HitboxCell cell : cells) {
+                drawHitboxStroke(canvas, cell);
             }
         }
-        return count;
+
+        private void buildHitboxCells(SettingsStore.Snapshot snapshot) {
+            cells.clear();
+            keyboardRect.set(dp(8), dp(6), getWidth() - dp(8), getHeight() - dp(8));
+
+            float gap = dp(4);
+            float availableWidth = keyboardRect.width() - gap * 8f;
+            float sideWeight = snapshot.hangulLeftColumnWeight(5f);
+            float centerWeight = 1f;
+            float rightWeight = snapshot.hangulRightColumnWeight(5f);
+            float totalWeight = sideWeight + centerWeight * 5f + rightWeight;
+            float sideWidth = availableWidth * sideWeight / totalWeight;
+            float centerWidth = availableWidth * centerWeight / totalWeight;
+            float rightWidth = availableWidth * rightWeight / totalWeight;
+            float top = keyboardRect.top + gap;
+            float rowHeight = (keyboardRect.height() - gap * 5f) / 4f;
+            if (centerWidth <= 1f || rowHeight <= 1f) {
+                return;
+            }
+
+            float left = keyboardRect.left + gap;
+            String[] sideLabels = {"Abc", "#★♪", "123", "⚙"};
+            for (int row = 0; row < sideLabels.length; row++) {
+                RectF rect = new RectF(left, top + row * (rowHeight + gap),
+                        left + sideWidth, top + row * (rowHeight + gap) + rowHeight);
+                addHitboxCell(sideLabels[row], rect, false, true, false, snapshot);
+            }
+
+            float centerLeft = left + sideWidth + gap;
+            Object[][] rows = calibrationKeyboardRows(snapshot.hangulTypeIndex);
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 5; col++) {
+                    Object value = rows[row][col + 1];
+                    String label = previewLabel(value);
+                    if (label.isEmpty()) {
+                        continue;
+                    }
+                    RectF rect = new RectF(centerLeft + col * (centerWidth + gap),
+                            top + row * (rowHeight + gap),
+                            centerLeft + col * (centerWidth + gap) + centerWidth,
+                            top + row * (rowHeight + gap) + rowHeight);
+                    boolean textInput = value instanceof Consonant || "모음".equals(label);
+                    addHitboxCell(label, rect, textInput, !textInput, false, snapshot);
+                }
+            }
+
+            float bottomTop = top + 3f * (rowHeight + gap);
+            addHitboxCell("←", new RectF(centerLeft, bottomTop,
+                    centerLeft + centerWidth, bottomTop + rowHeight), false, true, false, snapshot);
+            addHitboxCell("→", new RectF(centerLeft + centerWidth + gap, bottomTop,
+                    centerLeft + centerWidth * 2f + gap, bottomTop + rowHeight),
+                    false, true, false, snapshot);
+            addHitboxCell("＿", new RectF(centerLeft + (centerWidth + gap) * 2f, bottomTop,
+                    centerLeft + centerWidth * 5f + gap * 4f, bottomTop + rowHeight),
+                    false, true, false, snapshot);
+
+            float rightLeft = centerLeft + (centerWidth + gap) * 5f;
+            addHitboxCell("DEL\n←", new RectF(rightLeft, top,
+                    rightLeft + rightWidth, top + rowHeight * 3f + gap * 2f),
+                    false, true, false, snapshot);
+            addHitboxCell("Go", new RectF(rightLeft, bottomTop,
+                    rightLeft + rightWidth, bottomTop + rowHeight), false, false, true, snapshot);
+        }
+
+        private void addHitboxCell(String label, RectF keyRect, boolean textInput, boolean special,
+                                   boolean enter, SettingsStore.Snapshot snapshot) {
+            RectF hitRect = hitRectFor(keyRect, textInput, snapshot);
+            cells.add(new HitboxCell(label, keyRect, hitRect, textInput, special, enter));
+        }
+
+        private RectF hitRectFor(RectF rect, boolean textInput, SettingsStore.Snapshot snapshot) {
+            float gap = dp(5);
+            float baseSlop = dp(snapshot.hitboxBaseDp);
+            float leftCut = Math.min(rect.width() * 0.18f, dp(snapshot.hitboxLeftCutDp));
+            float topCut = Math.min(rect.height() * 0.18f, dp(snapshot.hitboxTopCutDp));
+            float rightSlop = baseSlop + dp(snapshot.hitboxRightExtraDp);
+            float bottomSlop = baseSlop + dp(snapshot.hitboxBottomExtraDp);
+            if (textInput && rect.centerX() < keyboardRect.centerX()) {
+                rightSlop += dp(snapshot.hitboxLeftKeyRightExtraDp);
+            }
+            return new RectF(
+                    Math.max(keyboardRect.left, rect.left + leftCut),
+                    Math.max(keyboardRect.top, rect.top + topCut),
+                    Math.min(keyboardRect.right, rect.right + rightSlop),
+                    Math.min(keyboardRect.bottom, rect.bottom + bottomSlop));
+        }
+
+        private void drawHitboxFill(Canvas canvas, HitboxCell cell) {
+            previewPaint.setShader(null);
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(cell.textInput ? Color.argb(58, 255, 70, 56)
+                    : Color.argb(38, 255, 126, 64));
+            canvas.drawRoundRect(cell.hitRect, dp(8), dp(8), previewPaint);
+        }
+
+        private void drawHitboxKey(Canvas canvas, HitboxCell cell, SettingsStore.KeyboardTheme theme) {
+            int keyColor = cell.enter ? theme.enterKey : (cell.special ? theme.keySpecial : theme.keyNormal);
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setColor(keyColor);
+            canvas.drawRoundRect(cell.keyRect, dp(8), dp(8), previewPaint);
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(Math.max(1f, dp(0.6f)));
+            previewPaint.setColor(theme.stroke);
+            canvas.drawRoundRect(cell.keyRect, dp(8), dp(8), previewPaint);
+
+            previewPaint.setStyle(Paint.Style.FILL);
+            previewPaint.setTextAlign(Paint.Align.CENTER);
+            previewPaint.setTypeface(cell.textInput ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            previewPaint.setColor(cell.enter ? theme.enterText : (cell.special ? theme.hint : theme.text));
+            String[] lines = cell.label.split("\\n", -1);
+            previewPaint.setTextSize(dp(cell.textInput ? 21 : 13));
+            Paint.FontMetrics metrics = previewPaint.getFontMetrics();
+            float lineHeight = metrics.descent - metrics.ascent;
+            float firstBaseline = cell.keyRect.centerY() - lineHeight * (lines.length - 1) / 2f
+                    - (metrics.ascent + metrics.descent) / 2f;
+            for (int i = 0; i < lines.length; i++) {
+                canvas.drawText(lines[i], cell.keyRect.centerX(), firstBaseline + lineHeight * i, previewPaint);
+            }
+            previewPaint.setTypeface(Typeface.DEFAULT);
+        }
+
+        private void drawHitboxStroke(Canvas canvas, HitboxCell cell) {
+            previewPaint.setStyle(Paint.Style.STROKE);
+            previewPaint.setStrokeWidth(cell.textInput ? dp(2f) : dp(1.2f));
+            previewPaint.setColor(cell.textInput ? Color.rgb(237, 61, 54) : Color.rgb(232, 112, 55));
+            canvas.drawRoundRect(cell.hitRect, dp(8), dp(8), previewPaint);
+        }
+
+        private String previewLabel(Object value) {
+            if (value instanceof Consonant) {
+                return ((Consonant) value).label();
+            }
+            return value == null ? "" : String.valueOf(value);
+        }
+    }
+
+    private static class HitboxCell {
+        final String label;
+        final RectF keyRect;
+        final RectF hitRect;
+        final boolean textInput;
+        final boolean special;
+        final boolean enter;
+
+        HitboxCell(String label, RectF keyRect, RectF hitRect, boolean textInput, boolean special, boolean enter) {
+            this.label = label == null ? "" : label;
+            this.keyRect = keyRect;
+            this.hitRect = hitRect;
+            this.textInput = textInput;
+            this.special = special;
+            this.enter = enter;
+        }
     }
 
     private class CalibrationProgressView extends View {
@@ -1174,6 +1840,7 @@ public class MainActivity extends Activity {
         private final RectF trackRect = new RectF();
         private float progress;
         private int lineIndex;
+        private int stepCount = 1;
         private int sampleCount;
 
         CalibrationProgressView(Context context) {
@@ -1181,9 +1848,10 @@ public class MainActivity extends Activity {
             setMinimumHeight(dp(64));
         }
 
-        void setState(float progress, int lineIndex, int sampleCount) {
+        void setState(float progress, int lineIndex, int stepCount, int sampleCount) {
             this.progress = Math.max(0f, Math.min(progress, 1f));
             this.lineIndex = lineIndex;
+            this.stepCount = Math.max(1, stepCount);
             this.sampleCount = sampleCount;
             invalidate();
         }
@@ -1226,7 +1894,7 @@ public class MainActivity extends Activity {
             progressPaint.setTypeface(Typeface.DEFAULT_BOLD);
             progressPaint.setTextSize(dp(14));
             progressPaint.setColor(TEXT_PRIMARY);
-            drawProgressText(canvas, "진행 " + (lineIndex + 1) + " / " + CALIBRATION_SENTENCES.length,
+            drawProgressText(canvas, "진행 " + (lineIndex + 1) + " / " + stepCount,
                     0, dp(13));
 
             progressPaint.setTextAlign(Paint.Align.RIGHT);
@@ -1271,22 +1939,24 @@ public class MainActivity extends Activity {
     }
 
     private class ActualCalibrationSession implements TextWatcher {
+        private final CalibrationPlanner.Plan plan;
         private final CalibrationProgressView progressView;
         private final TextView promptView;
         private final EditText inputView;
         private final TextView hintView;
-        private int lineIndex;
+        private int stepIndex;
         private boolean advancing;
         private boolean editingProgrammatically;
         private boolean finished;
 
-        ActualCalibrationSession(CalibrationProgressView progressView, TextView promptView, EditText inputView,
-                                 TextView hintView) {
+        ActualCalibrationSession(CalibrationPlanner.Plan plan, CalibrationProgressView progressView,
+                                 TextView promptView, EditText inputView, TextView hintView) {
+            this.plan = plan;
             this.progressView = progressView;
             this.promptView = promptView;
             this.inputView = inputView;
             this.hintView = hintView;
-            SettingsStore.startGestureCalibrationSession(MainActivity.this, currentSentence(), lineIndex);
+            SettingsStore.startGestureCalibrationSession(MainActivity.this, currentTarget(), stepIndex);
         }
 
         @Override
@@ -1309,19 +1979,21 @@ public class MainActivity extends Activity {
             if (finished) {
                 return;
             }
-            String sentence = currentSentence();
+            CalibrationPlanner.Step step = currentStep();
+            String target = currentTarget();
             String visible = inputView.getText().toString();
-            promptView.setText(sentence);
+            promptView.setText(target);
 
-            hintView.setText("입력한 획을 그대로 보정에 반영합니다. 줄 끝까지 치면 다음 줄로 넘어갑니다.");
+            hintView.setText(step.purpose + ": " + step.text + " " + step.repeats
+                    + "번 입력하세요. 틀려도 경고 없이 그 획을 샘플로 씁니다.");
             inputView.setTextColor(TEXT_PRIMARY);
 
-            int completedChars = calibrationCharactersBeforeLine(lineIndex)
-                    + Math.min(visible.length(), sentence.length());
-            progressView.setState(completedChars / (float) totalCalibrationCharacters(), lineIndex,
+            int completedChars = plan.completedCharactersBeforeStep(stepIndex)
+                    + Math.min(visible.length(), target.length());
+            progressView.setState(completedChars / (float) plan.totalCharacters(), stepIndex, plan.steps.size(),
                     SettingsStore.gestureCalibrationSessionSampleCount(MainActivity.this));
 
-            if (!advancing && visible.length() >= sentence.length()) {
+            if (!advancing && visible.length() >= target.length()) {
                 advancing = true;
                 root.postDelayed(this::advanceLine, 260);
             }
@@ -1344,18 +2016,18 @@ public class MainActivity extends Activity {
             if (finished) {
                 return;
             }
-            if (inputView.getText().toString().length() < currentSentence().length()) {
+            if (inputView.getText().toString().length() < currentTarget().length()) {
                 advancing = false;
                 refresh();
                 return;
             }
-            lineIndex++;
+            stepIndex++;
             advancing = false;
-            if (lineIndex >= CALIBRATION_SENTENCES.length) {
+            if (stepIndex >= plan.steps.size()) {
                 saveCalibration();
                 return;
             }
-            SettingsStore.updateGestureCalibrationSession(MainActivity.this, currentSentence(), lineIndex);
+            SettingsStore.updateGestureCalibrationSession(MainActivity.this, currentTarget(), stepIndex);
             editingProgrammatically = true;
             inputView.setText("");
             editingProgrammatically = false;
@@ -1383,8 +2055,12 @@ public class MainActivity extends Activity {
             showCalibrationCompletePage(samples.size());
         }
 
-        private String currentSentence() {
-            return CALIBRATION_SENTENCES[Math.min(lineIndex, CALIBRATION_SENTENCES.length - 1)];
+        private CalibrationPlanner.Step currentStep() {
+            return plan.steps.get(Math.min(stepIndex, plan.steps.size() - 1));
+        }
+
+        private String currentTarget() {
+            return currentStep().targetText();
         }
     }
 
@@ -1395,7 +2071,45 @@ public class MainActivity extends Activity {
     }
 
     private interface CalibrationKeySelectListener {
-        void onKeySelected(Consonant consonant, boolean cycleDirection);
+        void onKeySelected(Consonant consonant, String calibrationKey, boolean cycleDirection);
+    }
+
+    private Object[][] calibrationKeyboardRows(int hangulTypeIndex) {
+        if (isTwoBeolsikHangulType(hangulTypeIndex)) {
+            return new Object[][]{
+                    {"Abc", Consonant.BIEUP, Consonant.JIEUT, Consonant.DIGEUT, Consonant.GIYEOK, Consonant.SIOT, "DEL"},
+                    {"#★♪", Consonant.MIEUM, Consonant.NIEUN, Consonant.IEUNG, Consonant.RIEUL, Consonant.HIEUT, ""},
+                    {"123", Consonant.KIEUK, Consonant.TIEUT, Consonant.CHIEUT, Consonant.PIEUP, "모음", ""},
+                    {"⚙", "←", "→", "space", "space", "Go", ""}
+            };
+        }
+        return new Object[][]{
+                {"Abc", Consonant.KIEUK, Consonant.GIYEOK, Consonant.SIOT, Consonant.JIEUT, Consonant.CHIEUT, "DEL"},
+                {"#★♪", Consonant.HIEUT, Consonant.NIEUN, Consonant.IEUNG, Consonant.RIEUL, Consonant.MIEUM, ""},
+                {"123", Consonant.TIEUT, Consonant.DIGEUT, Consonant.BIEUP, Consonant.PIEUP, "모음", ""},
+                {"⚙", "←", "→", "space", "space", "Go", ""}
+        };
+    }
+
+    private boolean isTwoBeolsikHangulType(int hangulTypeIndex) {
+        return hangulTypeIndex == SettingsStore.HANGUL_TYPE_TWO_BEOLSIK_VERTICAL
+                || hangulTypeIndex == SettingsStore.HANGUL_TYPE_TWO_BEOLSIK_HORIZONTAL;
+    }
+
+    private String calibrationKeyForConsonant(Consonant consonant, int hangulTypeIndex) {
+        Object[][] rows = calibrationKeyboardRows(hangulTypeIndex);
+        for (int row = 0; row < rows.length; row++) {
+            for (int column = 0; column < rows[row].length; column++) {
+                if (rows[row][column] == consonant) {
+                    return gestureCalibrationKey(row, column - 1);
+                }
+            }
+        }
+        return "";
+    }
+
+    private String gestureCalibrationKey(int row, int column) {
+        return "hangul_gesture_r" + row + "_c" + column;
     }
 
     private class CalibrationAngleEditorView extends View {
@@ -1410,6 +2124,7 @@ public class MainActivity extends Activity {
         private GestureCalibration.Profile profile;
         private CalibrationKeyboardPickerView keyboardPickerView;
         private Consonant selectedConsonant;
+        private String selectedCalibrationKey;
         private GestureCalibration.DirectionClass selectedDirection = GestureCalibration.DirectionClass.TOP_RIGHT;
         private float centerX;
         private float centerY;
@@ -1418,11 +2133,12 @@ public class MainActivity extends Activity {
         private boolean draggingRange;
 
         CalibrationAngleEditorView(Context context, GestureCalibration.Profile profile, Consonant selectedConsonant,
-                                   float fallbackShortMm, float fallbackLongMm,
+                                   String selectedCalibrationKey, float fallbackShortMm, float fallbackLongMm,
                                    ManualAngleChangeListener angleChangeListener) {
             super(context);
             this.profile = profile == null ? new GestureCalibration.Profile() : profile;
             this.selectedConsonant = selectedConsonant;
+            this.selectedCalibrationKey = selectedCalibrationKey == null ? "" : selectedCalibrationKey;
             this.fallbackShortMm = fallbackShortMm;
             this.fallbackLongMm = fallbackLongMm;
             this.angleChangeListener = angleChangeListener;
@@ -1440,10 +2156,11 @@ public class MainActivity extends Activity {
             invalidate();
         }
 
-        void setSelectedConsonant(Consonant consonant) {
+        void setSelectedKey(Consonant consonant, String calibrationKey) {
             selectedConsonant = consonant;
+            selectedCalibrationKey = calibrationKey == null ? "" : calibrationKey;
             if (keyboardPickerView != null) {
-                keyboardPickerView.setSelection(selectedConsonant, selectedDirection);
+                keyboardPickerView.setSelection(selectedConsonant, selectedCalibrationKey, selectedDirection);
             }
             invalidate();
         }
@@ -1452,7 +2169,7 @@ public class MainActivity extends Activity {
             int index = Arrays.asList(EDITABLE_DIAGONALS).indexOf(selectedDirection);
             selectedDirection = EDITABLE_DIAGONALS[(index + 1 + EDITABLE_DIAGONALS.length) % EDITABLE_DIAGONALS.length];
             if (keyboardPickerView != null) {
-                keyboardPickerView.setSelection(selectedConsonant, selectedDirection);
+                keyboardPickerView.setSelection(selectedConsonant, selectedCalibrationKey, selectedDirection);
             }
             invalidate();
         }
@@ -1526,7 +2243,7 @@ public class MainActivity extends Activity {
             anglePaint.setTypeface(Typeface.DEFAULT);
             anglePaint.setTextSize(dp(13));
             anglePaint.setColor(TEXT_SECONDARY);
-            int samples = profile == null ? 0 : profile.consonantSamples(selectedConsonant);
+            int samples = profile == null ? 0 : profile.keySamples(selectedCalibrationKey, selectedConsonant);
             canvas.drawText("샘플 " + samples + "개 · " + directionName(selectedDirection)
                     + " " + Math.round(angleFor(selectedDirection)) + "°", dp(20), dp(55), anglePaint);
         }
@@ -1699,14 +2416,14 @@ public class MainActivity extends Activity {
             if (profile == null) {
                 profile = new GestureCalibration.Profile();
             }
-            profile.setDirectionAngle(selectedConsonant, selectedDirection, angle,
+            profile.setDirectionAngle(selectedCalibrationKey, selectedConsonant, selectedDirection, angle,
                     fallbackShortMm, fallbackLongMm);
             if (angleChangeListener != null) {
                 angleChangeListener.onManualAngleChanged(selectedConsonant, selectedDirection, angle);
             }
             if (keyboardPickerView != null) {
                 keyboardPickerView.setProfile(profile);
-                keyboardPickerView.setSelection(selectedConsonant, selectedDirection);
+                keyboardPickerView.setSelection(selectedConsonant, selectedCalibrationKey, selectedDirection);
                 keyboardPickerView.invalidate();
             }
             invalidate();
@@ -1722,11 +2439,11 @@ public class MainActivity extends Activity {
                     + (GestureCalibration.MAX_DIAGONAL_TOLERANCE_DEGREES
                     - GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES) * progress;
             tolerance = Math.round(tolerance);
-            profile.setDirectionTolerance(selectedConsonant, selectedDirection, tolerance,
+            profile.setDirectionTolerance(selectedCalibrationKey, selectedConsonant, selectedDirection, tolerance,
                     fallbackShortMm, fallbackLongMm);
             if (keyboardPickerView != null) {
                 keyboardPickerView.setProfile(profile);
-                keyboardPickerView.setSelection(selectedConsonant, selectedDirection);
+                keyboardPickerView.setSelection(selectedConsonant, selectedCalibrationKey, selectedDirection);
                 keyboardPickerView.invalidate();
             }
             invalidate();
@@ -1734,13 +2451,15 @@ public class MainActivity extends Activity {
 
         private float angleFor(GestureCalibration.DirectionClass directionClass) {
             GestureCalibration.DirectionProfile directionProfile =
-                    profile == null ? null : profile.directionProfile(selectedConsonant, directionClass);
+                    profile == null ? null : profile.directionProfile(
+                            selectedCalibrationKey, selectedConsonant, directionClass);
             return directionProfile == null ? defaultAngleFor(directionClass) : directionProfile.centerAngle;
         }
 
         private float toleranceFor(GestureCalibration.DirectionClass directionClass) {
             GestureCalibration.DirectionProfile directionProfile =
-                    profile == null ? null : profile.directionProfile(selectedConsonant, directionClass);
+                    profile == null ? null : profile.directionProfile(
+                            selectedCalibrationKey, selectedConsonant, directionClass);
             return directionProfile == null
                     ? GestureCalibration.DEFAULT_DIAGONAL_TOLERANCE_DEGREES
                     : Math.max(GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES,
@@ -1762,15 +2481,20 @@ public class MainActivity extends Activity {
         private final CalibrationKeySelectListener keySelectListener;
         private GestureCalibration.Profile profile;
         private Consonant selectedConsonant;
+        private String selectedCalibrationKey;
         private GestureCalibration.DirectionClass selectedDirection;
+        private final int hangulTypeIndex;
 
         CalibrationKeyboardPickerView(Context context, GestureCalibration.Profile profile, Consonant selectedConsonant,
-                                      GestureCalibration.DirectionClass selectedDirection,
+                                      String selectedCalibrationKey,
+                                      GestureCalibration.DirectionClass selectedDirection, int hangulTypeIndex,
                                       CalibrationKeySelectListener keySelectListener) {
             super(context);
             this.profile = profile == null ? new GestureCalibration.Profile() : profile;
             this.selectedConsonant = selectedConsonant;
+            this.selectedCalibrationKey = selectedCalibrationKey == null ? "" : selectedCalibrationKey;
             this.selectedDirection = selectedDirection;
+            this.hangulTypeIndex = hangulTypeIndex;
             this.keySelectListener = keySelectListener;
         }
 
@@ -1779,8 +2503,10 @@ public class MainActivity extends Activity {
             invalidate();
         }
 
-        void setSelection(Consonant consonant, GestureCalibration.DirectionClass directionClass) {
+        void setSelection(Consonant consonant, String calibrationKey,
+                          GestureCalibration.DirectionClass directionClass) {
             selectedConsonant = consonant;
+            selectedCalibrationKey = calibrationKey == null ? "" : calibrationKey;
             selectedDirection = directionClass;
             invalidate();
         }
@@ -1805,10 +2531,11 @@ public class MainActivity extends Activity {
             }
             for (CalibrationKeyCell cell : cells) {
                 if (cell.consonant != null && cell.rect.contains(event.getX(), event.getY())) {
-                    boolean cycleDirection = cell.consonant == selectedConsonant;
+                    boolean cycleDirection = cell.matches(selectedConsonant, selectedCalibrationKey);
                     selectedConsonant = cell.consonant;
+                    selectedCalibrationKey = cell.calibrationKey;
                     if (keySelectListener != null) {
-                        keySelectListener.onKeySelected(cell.consonant, cycleDirection);
+                        keySelectListener.onKeySelected(cell.consonant, cell.calibrationKey, cycleDirection);
                     }
                     invalidate();
                     return true;
@@ -1823,12 +2550,7 @@ public class MainActivity extends Activity {
             float top = dp(10);
             float rowHeight = (getHeight() - gap * 5f - dp(20)) / 4f;
             float[] weights = {1.05f, 1f, 1f, 1f, 1f, 1f, 1.45f};
-            Object[][] rows = {
-                    {"Abc", Consonant.KIEUK, Consonant.GIYEOK, Consonant.SIOT, Consonant.JIEUT, Consonant.CHIEUT, "DEL"},
-                    {"#★♪", Consonant.HIEUT, Consonant.NIEUN, Consonant.IEUNG, Consonant.RIEUL, Consonant.MIEUM, ""},
-                    {"123", Consonant.TIEUT, Consonant.DIGEUT, Consonant.BIEUP, Consonant.PIEUP, "모음", ""},
-                    {"⚙", "←", "→", "space", "space", "Go", ""}
-            };
+            Object[][] rows = calibrationKeyboardRows(hangulTypeIndex);
 
             for (int rowIndex = 0; rowIndex < rows.length; rowIndex++) {
                 float left = gap;
@@ -1843,9 +2565,10 @@ public class MainActivity extends Activity {
                     Object value = rows[rowIndex][column];
                     if (value instanceof Consonant) {
                         Consonant consonant = (Consonant) value;
-                        cells.add(new CalibrationKeyCell(rect, consonant.label(), consonant));
+                        cells.add(new CalibrationKeyCell(rect, consonant.label(), consonant,
+                                gestureCalibrationKey(rowIndex, column - 1)));
                     } else {
-                        cells.add(new CalibrationKeyCell(rect, String.valueOf(value), null));
+                        cells.add(new CalibrationKeyCell(rect, String.valueOf(value), null, ""));
                     }
                     left += width + gap;
                 }
@@ -1855,8 +2578,8 @@ public class MainActivity extends Activity {
 
         private void drawCalibrationKey(Canvas canvas, CalibrationKeyCell cell) {
             boolean selectable = cell.consonant != null;
-            boolean selected = selectable && cell.consonant == selectedConsonant;
-            boolean calibrated = selectable && hasAnyCalibration(cell.consonant);
+            boolean selected = selectable && cell.matches(selectedConsonant, selectedCalibrationKey);
+            boolean calibrated = selectable && hasAnyCalibration(cell);
             int keyColor = selectable ? Color.rgb(249, 251, 252) : Color.rgb(204, 214, 220);
             if (selected) {
                 keyColor = Color.rgb(232, 241, 255);
@@ -1885,15 +2608,15 @@ public class MainActivity extends Activity {
             keyboardPaint.setTypeface(Typeface.DEFAULT);
         }
 
-        private boolean hasAnyCalibration(Consonant consonant) {
+        private boolean hasAnyCalibration(CalibrationKeyCell cell) {
             if (profile == null) {
                 return false;
             }
-            if (profile.touchProfile(consonant) != null) {
+            if (profile.touchProfile(cell.calibrationKey, cell.consonant) != null) {
                 return true;
             }
             for (GestureCalibration.DirectionClass directionClass : EDITABLE_DIAGONALS) {
-                if (profile.directionProfile(consonant, directionClass) != null) {
+                if (profile.directionProfile(cell.calibrationKey, cell.consonant, directionClass) != null) {
                     return true;
                 }
             }
@@ -1911,11 +2634,22 @@ public class MainActivity extends Activity {
         final RectF rect;
         final String label;
         final Consonant consonant;
+        final String calibrationKey;
 
-        CalibrationKeyCell(RectF rect, String label, Consonant consonant) {
+        CalibrationKeyCell(RectF rect, String label, Consonant consonant, String calibrationKey) {
             this.rect = rect;
             this.label = label;
             this.consonant = consonant;
+            this.calibrationKey = calibrationKey == null ? "" : calibrationKey;
+        }
+
+        boolean matches(Consonant selectedConsonant, String selectedCalibrationKey) {
+            if (selectedCalibrationKey != null
+                    && !selectedCalibrationKey.isEmpty()
+                    && !calibrationKey.isEmpty()) {
+                return calibrationKey.equals(selectedCalibrationKey);
+            }
+            return consonant == selectedConsonant;
         }
     }
 

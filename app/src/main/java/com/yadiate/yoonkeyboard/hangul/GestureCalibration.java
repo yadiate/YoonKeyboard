@@ -16,7 +16,7 @@ public class GestureCalibration {
     private static final int MIN_DIRECTION_SAMPLES = 2;
     private static final int MIN_LONG_SAMPLES = 2;
     private static final int MIN_TOUCH_SAMPLES = 3;
-    public static final float DEFAULT_DIAGONAL_TOLERANCE_DEGREES = 32f;
+    public static final float DEFAULT_DIAGONAL_TOLERANCE_DEGREES = 22f;
     public static final float MIN_DIAGONAL_TOLERANCE_DEGREES = 18f;
     public static final float MAX_DIAGONAL_TOLERANCE_DEGREES = 45f;
 
@@ -100,10 +100,11 @@ public class GestureCalibration {
 
         Map<String, List<Sample>> byConsonant = new HashMap<>();
         for (Sample sample : samples) {
-            List<Sample> list = byConsonant.get(sample.consonantLabel);
+            String profileKey = sample.profileKey();
+            List<Sample> list = byConsonant.get(profileKey);
             if (list == null) {
                 list = new ArrayList<>();
-                byConsonant.put(sample.consonantLabel, list);
+                byConsonant.put(profileKey, list);
             }
             list.add(sample);
         }
@@ -350,25 +351,36 @@ public class GestureCalibration {
         public final float touchXRatio;
         public final float touchYRatio;
         public final String actualConsonantLabel;
+        public final String calibrationKey;
 
         public Sample(Consonant consonant, int expectedVowel, DirectionClass directionClass,
                       GestureVowelMapper.Trace trace) {
+            this(consonant, "", expectedVowel, directionClass, trace);
+        }
+
+        public Sample(Consonant consonant, String calibrationKey, int expectedVowel, DirectionClass directionClass,
+                      GestureVowelMapper.Trace trace) {
             this(consonant.label(), expectedVowel, directionClass, trace.angleDegrees, trace.distanceMm,
                     trace.dxMm, trace.dyMm, trace.pathMm, trace.durationMs,
-                    Float.NaN, Float.NaN, "");
+                    Float.NaN, Float.NaN, "", calibrationKey);
         }
 
         public Sample(Consonant expectedConsonant, Consonant actualConsonant,
                       float touchXRatio, float touchYRatio) {
+            this(expectedConsonant, "", actualConsonant, touchXRatio, touchYRatio);
+        }
+
+        public Sample(Consonant expectedConsonant, String calibrationKey, Consonant actualConsonant,
+                      float touchXRatio, float touchYRatio) {
             this(expectedConsonant.label(), -1, DirectionClass.TOUCH,
                     0f, 0f, 0f, 0f, 0f, 0L,
                     touchXRatio, touchYRatio,
-                    actualConsonant == null ? "" : actualConsonant.label());
+                    actualConsonant == null ? "" : actualConsonant.label(), calibrationKey);
         }
 
         Sample(String consonantLabel, int expectedVowel, DirectionClass directionClass, float angleDegrees,
                float distanceMm, float dxMm, float dyMm, float pathMm, long durationMs,
-               float touchXRatio, float touchYRatio, String actualConsonantLabel) {
+               float touchXRatio, float touchYRatio, String actualConsonantLabel, String calibrationKey) {
             this.consonantLabel = consonantLabel;
             this.expectedVowel = expectedVowel;
             this.directionClass = directionClass;
@@ -381,6 +393,11 @@ public class GestureCalibration {
             this.touchXRatio = touchXRatio;
             this.touchYRatio = touchYRatio;
             this.actualConsonantLabel = actualConsonantLabel == null ? "" : actualConsonantLabel;
+            this.calibrationKey = calibrationKey == null ? "" : calibrationKey;
+        }
+
+        String profileKey() {
+            return calibrationKey.isEmpty() ? consonantLabel : calibrationKey;
         }
 
         boolean hasTouchRatios() {
@@ -411,6 +428,9 @@ public class GestureCalibration {
                 if (!actualConsonantLabel.isEmpty()) {
                     object.put("actualConsonant", actualConsonantLabel);
                 }
+                if (!calibrationKey.isEmpty()) {
+                    object.put("key", calibrationKey);
+                }
             } catch (JSONException ignored) {
             }
             return object;
@@ -440,7 +460,8 @@ public class GestureCalibration {
                     object.optLong("duration", 0L),
                     object.has("touchX") ? (float) object.optDouble("touchX", 0d) : Float.NaN,
                     object.has("touchY") ? (float) object.optDouble("touchY", 0d) : Float.NaN,
-                    object.optString("actualConsonant", ""));
+                    object.optString("actualConsonant", ""),
+                    object.optString("key", ""));
         }
     }
 
@@ -605,42 +626,70 @@ public class GestureCalibration {
             return consonantProfile == null ? 0 : consonantProfile.totalSamples();
         }
 
+        public int keySamples(String calibrationKey, Consonant consonant) {
+            if (isValidProfileKey(calibrationKey)) {
+                ConsonantProfile keyProfile = consonants.get(calibrationKey);
+                if (keyProfile != null) {
+                    return keyProfile.totalSamples();
+                }
+            }
+            return consonantSamples(consonant);
+        }
+
         public void setDirectionAngle(Consonant consonant, DirectionClass directionClass, float angleDegrees,
                                       float fallbackShortMm, float fallbackLongMm) {
-            DirectionProfile previous = profileDirectionForEdit(consonant, directionClass);
+            setDirectionAngle("", consonant, directionClass, angleDegrees, fallbackShortMm, fallbackLongMm);
+        }
+
+        public void setDirectionAngle(String calibrationKey, Consonant consonant, DirectionClass directionClass,
+                                      float angleDegrees, float fallbackShortMm, float fallbackLongMm) {
+            DirectionProfile previous = profileDirectionForEdit(calibrationKey, consonant, directionClass);
             float tolerance = previous == null
                     ? DEFAULT_DIAGONAL_TOLERANCE_DEGREES
                     : previous.tolerance;
-            setDirectionCalibration(consonant, directionClass, angleDegrees, tolerance,
+            setDirectionCalibration(calibrationKey, consonant, directionClass, angleDegrees, tolerance,
                     fallbackShortMm, fallbackLongMm);
         }
 
         public void setDirectionTolerance(Consonant consonant, DirectionClass directionClass,
                                           float toleranceDegrees, float fallbackShortMm, float fallbackLongMm) {
-            DirectionProfile previous = profileDirectionForEdit(consonant, directionClass);
+            setDirectionTolerance("", consonant, directionClass, toleranceDegrees, fallbackShortMm, fallbackLongMm);
+        }
+
+        public void setDirectionTolerance(String calibrationKey, Consonant consonant, DirectionClass directionClass,
+                                          float toleranceDegrees, float fallbackShortMm, float fallbackLongMm) {
+            DirectionProfile previous = profileDirectionForEdit(calibrationKey, consonant, directionClass);
             float angle = previous == null
                     ? defaultAngleFor(directionClass)
                     : previous.centerAngle;
-            setDirectionCalibration(consonant, directionClass, angle, toleranceDegrees,
+            setDirectionCalibration(calibrationKey, consonant, directionClass, angle, toleranceDegrees,
                     fallbackShortMm, fallbackLongMm);
         }
 
         public void setDirectionCalibration(Consonant consonant, DirectionClass directionClass, float angleDegrees,
                                             float toleranceDegrees, float fallbackShortMm, float fallbackLongMm) {
+            setDirectionCalibration("", consonant, directionClass, angleDegrees, toleranceDegrees,
+                    fallbackShortMm, fallbackLongMm);
+        }
+
+        public void setDirectionCalibration(String calibrationKey, Consonant consonant, DirectionClass directionClass,
+                                            float angleDegrees, float toleranceDegrees,
+                                            float fallbackShortMm, float fallbackLongMm) {
             if (directionClass == null || !isDiagonal(directionClass)) {
                 return;
             }
             ConsonantProfile consonantProfile;
-            if (consonant == null) {
+            String profileKey = profileKey(calibrationKey, consonant);
+            if (profileKey.isEmpty()) {
                 if (global == null) {
                     global = new ConsonantProfile();
                 }
                 consonantProfile = global;
             } else {
-                consonantProfile = consonants.get(consonant.label());
+                consonantProfile = consonants.get(profileKey);
                 if (consonantProfile == null) {
                     consonantProfile = new ConsonantProfile();
-                    consonants.put(consonant.label(), consonantProfile);
+                    consonants.put(profileKey, consonantProfile);
                 }
             }
             DirectionProfile previous = consonantProfile.directions.get(directionClass);
@@ -659,6 +708,20 @@ public class GestureCalibration {
         }
 
         private DirectionProfile profileDirectionForEdit(Consonant consonant, DirectionClass directionClass) {
+            return profileDirectionForEdit("", consonant, directionClass);
+        }
+
+        private DirectionProfile profileDirectionForEdit(String calibrationKey, Consonant consonant,
+                                                        DirectionClass directionClass) {
+            if (isValidProfileKey(calibrationKey)) {
+                ConsonantProfile keyProfile = consonants.get(calibrationKey);
+                DirectionProfile keyDirection = keyProfile == null
+                        ? null
+                        : keyProfile.directions.get(directionClass);
+                if (keyDirection != null) {
+                    return keyDirection;
+                }
+            }
             if (consonant == null) {
                 return global == null ? null : global.directions.get(directionClass);
             }
@@ -691,6 +754,17 @@ public class GestureCalibration {
             return profileDirection(global, directionClass);
         }
 
+        public DirectionProfile directionProfile(String calibrationKey, Consonant consonant,
+                                                 DirectionClass directionClass) {
+            if (isValidProfileKey(calibrationKey)) {
+                DirectionProfile directionProfile = profileDirection(consonants.get(calibrationKey), directionClass);
+                if (directionProfile != null) {
+                    return directionProfile;
+                }
+            }
+            return directionProfile(consonant, directionClass);
+        }
+
         public float longHorizontalMm(Consonant consonant, float fallbackMm) {
             ConsonantProfile consonantProfile = consonant == null ? null : consonants.get(consonant.label());
             if (consonantProfile != null && consonantProfile.longHorizontalSamples >= MIN_LONG_SAMPLES) {
@@ -702,6 +776,16 @@ public class GestureCalibration {
             return fallbackMm;
         }
 
+        public float longHorizontalMm(String calibrationKey, Consonant consonant, float fallbackMm) {
+            if (isValidProfileKey(calibrationKey)) {
+                ConsonantProfile keyProfile = consonants.get(calibrationKey);
+                if (keyProfile != null && keyProfile.longHorizontalSamples >= MIN_LONG_SAMPLES) {
+                    return keyProfile.longHorizontalMm;
+                }
+            }
+            return longHorizontalMm(consonant, fallbackMm);
+        }
+
         public TouchProfile touchProfile(Consonant consonant) {
             ConsonantProfile consonantProfile = consonant == null ? null : consonants.get(consonant.label());
             TouchProfile touchProfile = profileTouch(consonantProfile);
@@ -709,6 +793,16 @@ public class GestureCalibration {
                 return touchProfile;
             }
             return profileTouch(global);
+        }
+
+        public TouchProfile touchProfile(String calibrationKey, Consonant consonant) {
+            if (isValidProfileKey(calibrationKey)) {
+                TouchProfile touchProfile = profileTouch(consonants.get(calibrationKey));
+                if (touchProfile != null) {
+                    return touchProfile;
+                }
+            }
+            return touchProfile(consonant);
         }
 
         public float longVerticalMm(Consonant consonant, float fallbackMm) {
@@ -720,6 +814,16 @@ public class GestureCalibration {
                 return global.longVerticalMm;
             }
             return fallbackMm;
+        }
+
+        public float longVerticalMm(String calibrationKey, Consonant consonant, float fallbackMm) {
+            if (isValidProfileKey(calibrationKey)) {
+                ConsonantProfile keyProfile = consonants.get(calibrationKey);
+                if (keyProfile != null && keyProfile.longVerticalSamples >= MIN_LONG_SAMPLES) {
+                    return keyProfile.longVerticalMm;
+                }
+            }
+            return longVerticalMm(consonant, fallbackMm);
         }
 
         public String toJson() {
@@ -780,6 +884,17 @@ public class GestureCalibration {
                 return null;
             }
             return profile.touchProfile;
+        }
+
+        private String profileKey(String calibrationKey, Consonant consonant) {
+            if (isValidProfileKey(calibrationKey)) {
+                return calibrationKey;
+            }
+            return consonant == null ? "" : consonant.label();
+        }
+
+        private boolean isValidProfileKey(String calibrationKey) {
+            return calibrationKey != null && !calibrationKey.trim().isEmpty();
         }
     }
 }

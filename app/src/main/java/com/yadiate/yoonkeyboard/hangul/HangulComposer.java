@@ -39,12 +39,18 @@ public class HangulComposer {
     private static final Map<Integer, FinalSplit> FINAL_SPLITS = new HashMap<>();
 
     static {
+        putVowel(V_A, V_I, V_AE);
+        putVowel(V_YA, V_I, V_YAE);
+        putVowel(V_EO, V_I, V_E);
+        putVowel(V_YEO, V_I, V_YE);
         putVowel(V_O, V_A, V_WA);
         putVowel(V_O, V_AE, V_WAE);
         putVowel(V_O, V_I, V_OE);
+        putVowel(V_WA, V_I, V_WAE);
         putVowel(V_U, V_EO, V_WEO);
         putVowel(V_U, V_E, V_WE);
         putVowel(V_U, V_I, V_WI);
+        putVowel(V_WEO, V_I, V_WE);
         putVowel(V_EU, V_I, V_YI);
 
         putFinal(1, 19, 3);
@@ -141,6 +147,18 @@ public class HangulComposer {
         return committed + compatVowel(nextVowel);
     }
 
+    public String inputGestureVowel(int nextVowel) {
+        if (lead >= 0 && vowel >= 0 && tail == 0) {
+            int combined = combineVowel(vowel, nextVowel);
+            if (combined >= 0) {
+                vowel = combined;
+                return "";
+            }
+            return "";
+        }
+        return inputVowel(nextVowel);
+    }
+
     public boolean backspace() {
         if (tail > 0) {
             FinalSplit split = FINAL_SPLITS.get(tail);
@@ -162,8 +180,7 @@ public class HangulComposer {
         if (base == null || replacement == null) {
             return false;
         }
-        if (lead == base.leadingIndex() && vowel < 0 && tail == 0) {
-            lead = replacement.leadingIndex();
+        if (replaceLeadingConsonant(base, replacement)) {
             return true;
         }
         if (vowel >= 0 && tail == base.finalIndex() && replacement.finalIndex() > 0) {
@@ -173,9 +190,24 @@ public class HangulComposer {
         return false;
     }
 
+    public boolean replaceLeadingConsonant(Consonant base, Consonant replacement) {
+        if (base == null || replacement == null) {
+            return false;
+        }
+        if (lead == base.leadingIndex() && vowel < 0 && tail == 0) {
+            lead = replacement.leadingIndex();
+            return true;
+        }
+        return false;
+    }
+
     public boolean canPromoteCombinedFinalToDoubleInitial(Consonant base) {
         if (base == null || tail <= 0) {
             return false;
+        }
+        Consonant replacement = base.doubleTapVariant();
+        if (replacement != null && replacement.finalIndex() == 0 && tail == base.finalIndex()) {
+            return true;
         }
         FinalSplit split = FINAL_SPLITS.get(tail);
         return split != null && split.nextLeading == base;
@@ -252,6 +284,10 @@ public class HangulComposer {
 
     public boolean isLeadingOnly() {
         return lead >= 0 && vowel < 0 && tail == 0;
+    }
+
+    public Consonant leadingOnlyConsonant() {
+        return isLeadingOnly() ? Consonant.fromLeadingIndex(lead) : null;
     }
 
     public String getComposingText() {

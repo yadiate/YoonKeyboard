@@ -21,11 +21,14 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.yadiate.yoonkeyboard"
+        applicationId (project.findProperty("keyboardApplicationId") ?: "com.yadiate.yoonkeyboard")
         minSdk 21
         targetSdk 35
-        versionCode 18
-        versionName "0.2.16"
+        versionCode ((project.findProperty("keyboardVersionCode") ?: "36") as Integer)
+        versionName (project.findProperty("keyboardVersionName") ?: "0.2.34")
+        manifestPlaceholders = [
+                keyboardAppLabel: project.findProperty("keyboardAppLabel") ?: "@string/app_name"
+        ]
     }
 
     signingConfigs {

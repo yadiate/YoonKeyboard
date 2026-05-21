@@ -16,9 +16,14 @@ import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
+import android.text.TextUtils;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.ExtractedText;
+import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputContentInfo;
 
@@ -34,6 +39,8 @@ import java.util.List;
 
 public class EightWayInputMethodService extends InputMethodService
         implements KeyboardActionListener, KeyboardSurfaceView.GestureTraceListener {
+    private static final int DELETE_VERIFY_CONTEXT_CHARS = 80;
+
     private final HangulComposer composer = new HangulComposer();
     private KeyboardSurfaceView keyboardView;
     private KeyboardMode mode = KeyboardMode.HANGUL;
@@ -45,9 +52,13 @@ public class EightWayInputMethodService extends InputMethodService
     private Consonant lastConsonantTap;
     private long lastConsonantTapTimeMs;
     private boolean immediateConsonantPlaceholderVisible;
+    private Consonant recentlySettledStandaloneConsonant;
+    private long recentlySettledStandaloneConsonantTimeMs;
 
     @Override
     public View onCreateInputView() {
+        hideSystemCandidateBar();
+        setCandidatesView(hiddenCandidatesView());
         settings = SettingsStore.load(this);
         keyboardView = new KeyboardSurfaceView(this);
         keyboardView.setListener(this);
@@ -58,8 +69,19 @@ public class EightWayInputMethodService extends InputMethodService
     }
 
     @Override
+    public View onCreateCandidatesView() {
+        return hiddenCandidatesView();
+    }
+
+    @Override
+    public boolean onEvaluateFullscreenMode() {
+        return false;
+    }
+
+    @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
+        hideSystemCandidateBar();
         currentEditorPackage = attribute == null || attribute.packageName == null ? "" : attribute.packageName;
         currentEditorIsPassword = isPasswordInput(attribute);
         currentEditorImeOptions = attribute == null
@@ -67,21 +89,37 @@ public class EightWayInputMethodService extends InputMethodService
                 : attribute.imeOptions;
         currentEditorActionId = attribute == null ? 0 : attribute.actionId;
         settings = SettingsStore.load(this);
+        mode = preferredModeForEditor(attribute);
         if (keyboardView != null) {
             keyboardView.setSettings(settings);
+            keyboardView.setMode(mode);
         }
         composer.reset();
         immediateConsonantPlaceholderVisible = false;
+        clearSettledStandaloneRecovery();
         resetDoubleConsonantTapState();
     }
 
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
+        hideSystemCandidateBar();
+        settings = SettingsStore.load(this);
+        mode = preferredModeForEditor(info);
+        if (keyboardView != null) {
+            keyboardView.setSettings(settings);
+            keyboardView.setMode(mode);
+        }
+    }
+
+    @Override
+    public void onWindowShown() {
+        super.onWindowShown();
         settings = SettingsStore.load(this);
         if (keyboardView != null) {
             keyboardView.setSettings(settings);
         }
+        hideSystemCandidateBar();
     }
 
     @Override
@@ -100,6 +138,10 @@ public class EightWayInputMethodService extends InputMethodService
         if (key.type == KeySpec.Type.NO_OP || key.type == KeySpec.Type.HANGUL_VOWEL_PAD) {
             return;
         }
+        if (key.type == KeySpec.Type.CANCEL_TOUCH_DOWN) {
+            undoImmediateHangulTouchDown();
+            return;
+        }
         playKeySound();
         vibrate();
         switch (key.type) {
@@ -108,6 +150,7 @@ public class EightWayInputMethodService extends InputMethodService
                 break;
             case HANGUL_VOWEL:
                 resetDoubleConsonantTapState();
+                restoreSettledStandaloneForVowelIfNeeded(SystemClock.uptimeMillis());
                 commitTextIfNeeded(composer.inputVowel(key.vowelIndex));
                 refreshComposingText();
                 break;
@@ -115,8 +158,8 @@ public class EightWayInputMethodService extends InputMethodService
                 resetDoubleConsonantTapState();
                 commitComposingText();
                 commitText(key.outputText);
-                if (mode == KeyboardMode.ENGLISH && keyboardView != null && keyboardView.isShift()) {
-                    keyboardView.setShift(false);
+                if (mode == KeyboardMode.ENGLISH && keyboardView != null) {
+                    keyboardView.consumeOneShotShift();
                 }
                 break;
             case MODE_HANGUL:
@@ -150,7 +193,13 @@ public class EightWayInputMethodService extends InputMethodService
             case SHIFT:
                 resetDoubleConsonantTapState();
                 if (keyboardView != null) {
-                    keyboardView.setShift(!keyboardView.isShift());
+                    keyboardView.toggleShift();
+                }
+                break;
+            case SHIFT_LOCK:
+                resetDoubleConsonantTapState();
+                if (keyboardView != null) {
+                    keyboardView.enableCapsLock();
                 }
                 break;
             case DELETE:
@@ -176,14 +225,6 @@ public class EightWayInputMethodService extends InputMethodService
                 resetDoubleConsonantTapState();
                 openSettings();
                 break;
-            case USEFUL_SENTENCE:
-                resetDoubleConsonantTapState();
-                commitStoredText(SettingsStore.firstNonEmptySentence(this));
-                break;
-            case MY_INFO:
-                resetDoubleConsonantTapState();
-                commitStoredText(SettingsStore.firstNonEmptyMyInfo(this));
-                break;
             case CLIPBOARD_CONTEXT:
                 resetDoubleConsonantTapState();
                 showClipboardContext();
@@ -200,6 +241,8 @@ public class EightWayInputMethodService extends InputMethodService
                 if (keyboardView != null) {
                     keyboardView.hideClipboardContext();
                 }
+                break;
+            case CANCEL_TOUCH_DOWN:
                 break;
             case MOVE_LEFT:
                 resetDoubleConsonantTapState();
@@ -253,7 +296,8 @@ public class EightWayInputMethodService extends InputMethodService
             }
         }
         resetDoubleConsonantTapState();
-        commitTextIfNeeded(composer.inputVowel(vowelIndex));
+        restoreSettledStandaloneForVowelIfNeeded(SystemClock.uptimeMillis());
+        commitTextIfNeeded(composer.inputGestureVowel(vowelIndex));
         refreshComposingText();
     }
 
@@ -275,10 +319,12 @@ public class EightWayInputMethodService extends InputMethodService
         if (expectedRect == null || expectedRect.width() <= 1f || expectedRect.height() <= 1f) {
             return;
         }
+        String calibrationKey = keyboardView.currentConsonantCalibrationKey(expectedConsonant);
         float xRatio = (touch.touchX - expectedRect.left) / expectedRect.width();
         float yRatio = (touch.touchY - expectedRect.top) / expectedRect.height();
         SettingsStore.appendGestureCalibrationSample(this,
-                new GestureCalibration.Sample(expectedConsonant, touch.actualConsonant, xRatio, yRatio));
+                new GestureCalibration.Sample(expectedConsonant, calibrationKey, touch.actualConsonant,
+                        xRatio, yRatio));
     }
 
     @Override
@@ -300,7 +346,8 @@ public class EightWayInputMethodService extends InputMethodService
             return;
         }
         SettingsStore.appendGestureCalibrationSample(this,
-                new GestureCalibration.Sample(trace.key.consonant, expectedVowel, directionClass, trace.motion));
+                new GestureCalibration.Sample(trace.key.consonant, trace.key.calibrationKey,
+                        expectedVowel, directionClass, trace.motion));
     }
 
     private boolean shouldCollectCalibrationTouch(KeyboardSurfaceView.ConsonantTouch touch) {
@@ -335,6 +382,13 @@ public class EightWayInputMethodService extends InputMethodService
         }
         CharSequence beforeCursor = inputConnection.getTextBeforeCursor(256, 0);
         int index = beforeCursor == null ? 0 : beforeCursor.length();
+        if (immediateConsonantPlaceholderVisible && composer.isLeadingOnly() && beforeCursor != null) {
+            String composing = composer.getComposingText();
+            String beforeText = beforeCursor.toString();
+            if (composing != null && !composing.isEmpty() && beforeText.endsWith(composing)) {
+                index = Math.max(0, index - composing.length());
+            }
+        }
         if (index < 0 || index >= target.length()) {
             return 0;
         }
@@ -344,6 +398,7 @@ public class EightWayInputMethodService extends InputMethodService
     private void switchMode(KeyboardMode nextMode) {
         resetDoubleConsonantTapState();
         commitComposingText();
+        hideSystemCandidateBar();
         mode = nextMode;
         if (keyboardView != null) {
             keyboardView.setMode(nextMode);
@@ -358,6 +413,7 @@ public class EightWayInputMethodService extends InputMethodService
             return;
         }
         settleImmediateConsonantPlaceholderIfStandalone();
+        clearSettledStandaloneRecoveryIfNot(consonant, now);
         commitTextIfNeeded(composer.inputConsonant(consonant));
         refreshComposingText();
         lastConsonantTap = consonant;
@@ -375,15 +431,8 @@ public class EightWayInputMethodService extends InputMethodService
             }
             return;
         }
-        String committedBeforeMovedFinal = composer.moveFinalToInitialForTouchedConsonant(consonant);
-        if (committedBeforeMovedFinal != null) {
-            commitTextIfNeeded(committedBeforeMovedFinal);
-            showImmediateConsonantPlaceholder();
-            lastConsonantTap = consonant;
-            lastConsonantTapTimeMs = now;
-            return;
-        }
         settleImmediateConsonantPlaceholderIfStandalone();
+        clearSettledStandaloneRecoveryIfNot(consonant, now);
         commitTextIfNeeded(composer.inputConsonant(consonant));
         if (composer.isLeadingOnly()) {
             showImmediateConsonantPlaceholder();
@@ -399,29 +448,42 @@ public class EightWayInputMethodService extends InputMethodService
         if (replacement == null) {
             return false;
         }
-        if (composer.canPromoteCombinedFinalToDoubleInitial(consonant)) {
+        boolean withinTapWindow = withinDoubleConsonantTapWindow(consonant, now);
+        boolean withinSettledWindow = withinSettledStandaloneDoubleWindow(consonant, now);
+        if (!withinTapWindow && !withinSettledWindow) {
+            return false;
+        }
+        if (withinTapWindow && composer.replaceLeadingConsonant(consonant, replacement)) {
+            clearSettledStandaloneRecovery();
+            return true;
+        }
+        if (withinSettledWindow && restoreSettledStandaloneAsDoubleInitial(consonant, replacement, now)) {
+            return true;
+        }
+        if (withinTapWindow && composer.canPromoteCombinedFinalToDoubleInitial(consonant)) {
             String committed = composer.promoteFinalToDoubleInitial(consonant, replacement);
             if (committed != null) {
                 commitTextIfNeeded(committed);
                 return true;
             }
         }
-        if (lastConsonantTap != consonant
-                || now - lastConsonantTapTimeMs > doubleConsonantRecoveryTimeoutMs()) {
-            return false;
-        }
-        String committed = composer.promoteFinalToDoubleInitial(consonant, replacement);
-        if (committed != null) {
-            commitTextIfNeeded(committed);
-            return true;
-        }
-        if (now - lastConsonantTapTimeMs > doubleConsonantTimeoutMs()) {
-            return false;
-        }
-        if (composer.replaceSingleConsonant(consonant, replacement)) {
+        if (withinTapWindow && composer.replaceSingleConsonant(consonant, replacement)) {
+            clearSettledStandaloneRecovery();
             return true;
         }
         return false;
+    }
+
+    private boolean withinDoubleConsonantTapWindow(Consonant consonant, long now) {
+        return lastConsonantTap == consonant
+                && lastConsonantTapTimeMs > 0L
+                && now - lastConsonantTapTimeMs <= doubleConsonantTimeoutMs();
+    }
+
+    private boolean withinSettledStandaloneDoubleWindow(Consonant consonant, long now) {
+        return recentlySettledStandaloneConsonant == consonant
+                && recentlySettledStandaloneConsonantTimeMs > 0L
+                && now - recentlySettledStandaloneConsonantTimeMs <= doubleConsonantTimeoutMs();
     }
 
     private int doubleConsonantTimeoutMs() {
@@ -435,6 +497,23 @@ public class EightWayInputMethodService extends InputMethodService
     private void resetDoubleConsonantTapState() {
         lastConsonantTap = null;
         lastConsonantTapTimeMs = 0L;
+    }
+
+    private void undoImmediateHangulTouchDown() {
+        resetDoubleConsonantTapState();
+        if (immediateConsonantPlaceholderVisible && composer.isLeadingOnly()) {
+            InputConnection inputConnection = getCurrentInputConnection();
+            if (inputConnection != null) {
+                inputConnection.setComposingText("", 1);
+                inputConnection.finishComposingText();
+            }
+            immediateConsonantPlaceholderVisible = false;
+            composer.reset();
+            return;
+        }
+        if (composer.hasComposingText() && composer.backspace()) {
+            refreshComposingTextAfterBackspace();
+        }
     }
 
     private void handleBackspace() {
@@ -454,7 +533,148 @@ public class EightWayInputMethodService extends InputMethodService
         }
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection != null) {
-            inputConnection.deleteSurroundingText(1, 0);
+            deleteExternalCharacter(inputConnection);
+        }
+    }
+
+    private void deleteExternalCharacter(InputConnection inputConnection) {
+        CharSequence selectedText = inputConnection.getSelectedText(0);
+        if (selectedText != null && selectedText.length() > 0) {
+            inputConnection.commitText("", 1);
+            return;
+        }
+        DeletionSnapshot beforeDelete = DeletionSnapshot.capture(inputConnection);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+                && inputConnection.deleteSurroundingTextInCodePoints(1, 0)
+                && (!beforeDelete.canVerify() || beforeDelete.changed(inputConnection))) {
+            return;
+        }
+        if (inputConnection.deleteSurroundingText(1, 0)
+                && (!beforeDelete.canVerify() || beforeDelete.changed(inputConnection))) {
+            return;
+        }
+        boolean selectionDeleted = deletePreviousCodePointBySelection(inputConnection);
+        if (!selectionDeleted && (!beforeDelete.canVerify() || !beforeDelete.changed(inputConnection))) {
+            sendDeleteKeyEvent(inputConnection);
+        }
+    }
+
+    private boolean sendDeleteKeyEvent(InputConnection inputConnection) {
+        long eventTime = SystemClock.uptimeMillis();
+        boolean downHandled = inputConnection.sendKeyEvent(new KeyEvent(
+                eventTime,
+                eventTime,
+                KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_DEL,
+                0,
+                0,
+                KeyCharacterMap.VIRTUAL_KEYBOARD,
+                0,
+                KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE));
+        boolean upHandled = inputConnection.sendKeyEvent(new KeyEvent(
+                eventTime,
+                SystemClock.uptimeMillis(),
+                KeyEvent.ACTION_UP,
+                KeyEvent.KEYCODE_DEL,
+                0,
+                0,
+                KeyCharacterMap.VIRTUAL_KEYBOARD,
+                0,
+                KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE));
+        return downHandled || upHandled;
+    }
+
+    private boolean deletePreviousCodePointBySelection(InputConnection inputConnection) {
+        ExtractedText extracted = readExtractedText(inputConnection);
+        if (extracted == null || extracted.text == null) {
+            return false;
+        }
+        int selectionStart = Math.max(0, Math.min(extracted.selectionStart, extracted.text.length()));
+        int selectionEnd = Math.max(0, Math.min(extracted.selectionEnd, extracted.text.length()));
+        int deleteEnd = Math.max(selectionStart, selectionEnd);
+        int deleteStart = Math.min(selectionStart, selectionEnd);
+        if (deleteStart == deleteEnd) {
+            if (deleteStart <= 0) {
+                return false;
+            }
+            deleteStart = Character.offsetByCodePoints(extracted.text, deleteStart, -1);
+        }
+        int absoluteStart = Math.max(0, extracted.startOffset + deleteStart);
+        int absoluteEnd = Math.max(absoluteStart, extracted.startOffset + deleteEnd);
+        if (!inputConnection.setSelection(absoluteStart, absoluteEnd)) {
+            return false;
+        }
+        inputConnection.commitText("", 1);
+        return true;
+    }
+
+    private static ExtractedText readExtractedText(InputConnection inputConnection) {
+        try {
+            ExtractedTextRequest request = new ExtractedTextRequest();
+            request.hintMaxChars = DELETE_VERIFY_CONTEXT_CHARS * 4;
+            request.hintMaxLines = 1;
+            return inputConnection.getExtractedText(request, 0);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static final class DeletionSnapshot {
+        private final String extractedText;
+        private final int selectionStart;
+        private final int selectionEnd;
+        private final String beforeCursor;
+        private final boolean beforeCursorComplete;
+
+        private DeletionSnapshot(
+                String extractedText,
+                int selectionStart,
+                int selectionEnd,
+                String beforeCursor,
+                boolean beforeCursorComplete
+        ) {
+            this.extractedText = extractedText;
+            this.selectionStart = selectionStart;
+            this.selectionEnd = selectionEnd;
+            this.beforeCursor = beforeCursor;
+            this.beforeCursorComplete = beforeCursorComplete;
+        }
+
+        static DeletionSnapshot capture(InputConnection inputConnection) {
+            ExtractedText extracted = readExtractedText(inputConnection);
+            if (extracted != null && extracted.text != null) {
+                return new DeletionSnapshot(extracted.text.toString(),
+                        extracted.selectionStart, extracted.selectionEnd, null, false);
+            }
+            CharSequence before = null;
+            try {
+                before = inputConnection.getTextBeforeCursor(DELETE_VERIFY_CONTEXT_CHARS, 0);
+            } catch (RuntimeException ignored) {
+            }
+            String beforeText = before == null ? null : before.toString();
+            boolean complete = beforeText != null && beforeText.length() < DELETE_VERIFY_CONTEXT_CHARS;
+            return new DeletionSnapshot(null, -1, -1, beforeText, complete);
+        }
+
+        boolean canVerify() {
+            return extractedText != null || (beforeCursor != null && beforeCursorComplete);
+        }
+
+        boolean changed(InputConnection inputConnection) {
+            if (extractedText != null) {
+                ExtractedText extracted = readExtractedText(inputConnection);
+                return extracted != null
+                        && extracted.text != null
+                        && (!TextUtils.equals(extractedText, extracted.text)
+                        || selectionStart != extracted.selectionStart
+                        || selectionEnd != extracted.selectionEnd);
+            }
+            CharSequence after = null;
+            try {
+                after = inputConnection.getTextBeforeCursor(DELETE_VERIFY_CONTEXT_CHARS, 0);
+            } catch (RuntimeException ignored) {
+            }
+            return after != null && !TextUtils.equals(beforeCursor, after);
         }
     }
 
@@ -514,12 +734,83 @@ public class EightWayInputMethodService extends InputMethodService
         if (!immediateConsonantPlaceholderVisible || !composer.isLeadingOnly()) {
             return;
         }
+        rememberSettledStandaloneConsonant(composer.leadingOnlyConsonant(), SystemClock.uptimeMillis());
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection != null) {
             inputConnection.finishComposingText();
         }
         immediateConsonantPlaceholderVisible = false;
         composer.reset();
+    }
+
+    private boolean restoreSettledStandaloneAsDoubleInitial(
+            Consonant consonant,
+            Consonant replacement,
+            long now
+    ) {
+        if (recentlySettledStandaloneConsonant != consonant
+                || !canRecoverSettledStandalone(now)
+                || composer.hasComposingText()) {
+            return false;
+        }
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection == null) {
+            clearSettledStandaloneRecovery();
+            return false;
+        }
+        inputConnection.deleteSurroundingText(1, 0);
+        composer.reset();
+        composer.inputConsonant(replacement);
+        immediateConsonantPlaceholderVisible = true;
+        clearSettledStandaloneRecovery();
+        return true;
+    }
+
+    private void restoreSettledStandaloneForVowelIfNeeded(long now) {
+        if (!canRecoverSettledStandalone(now) || composer.hasComposingText()) {
+            return;
+        }
+        InputConnection inputConnection = getCurrentInputConnection();
+        if (inputConnection == null) {
+            clearSettledStandaloneRecovery();
+            return;
+        }
+        Consonant restored = recentlySettledStandaloneConsonant;
+        inputConnection.deleteSurroundingText(1, 0);
+        composer.reset();
+        composer.inputConsonant(restored);
+        immediateConsonantPlaceholderVisible = true;
+        clearSettledStandaloneRecovery();
+    }
+
+    private boolean canRecoverSettledStandalone(long now) {
+        if (recentlySettledStandaloneConsonant == null) {
+            return false;
+        }
+        if (now - recentlySettledStandaloneConsonantTimeMs <= doubleConsonantRecoveryTimeoutMs()) {
+            return true;
+        }
+        clearSettledStandaloneRecovery();
+        return false;
+    }
+
+    private void clearSettledStandaloneRecoveryIfNot(Consonant consonant, long now) {
+        if (recentlySettledStandaloneConsonant == null) {
+            return;
+        }
+        if (recentlySettledStandaloneConsonant != consonant || !canRecoverSettledStandalone(now)) {
+            clearSettledStandaloneRecovery();
+        }
+    }
+
+    private void rememberSettledStandaloneConsonant(Consonant consonant, long now) {
+        recentlySettledStandaloneConsonant = consonant;
+        recentlySettledStandaloneConsonantTimeMs = consonant == null ? 0L : now;
+    }
+
+    private void clearSettledStandaloneRecovery() {
+        recentlySettledStandaloneConsonant = null;
+        recentlySettledStandaloneConsonantTimeMs = 0L;
     }
 
     private void commitTextIfNeeded(String text) {
@@ -529,6 +820,7 @@ public class EightWayInputMethodService extends InputMethodService
     }
 
     private void commitText(String text) {
+        clearSettledStandaloneRecovery();
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection != null) {
             inputConnection.commitText(text, 1);
@@ -571,19 +863,11 @@ public class EightWayInputMethodService extends InputMethodService
         startActivity(intent);
     }
 
-    private void commitStoredText(String text) {
-        if (text == null || text.trim().isEmpty()) {
-            openSettings();
-            return;
-        }
-        commitComposingText();
-        commitText(text);
-    }
-
     private void showClipboardContext() {
         if (keyboardView == null) {
             return;
         }
+        hideSystemCandidateBar();
         if (currentEditorIsPassword) {
             keyboardView.showClipboardContext(new ArrayList<>(), "보안 입력란에서는 클립보드 미리보기를 숨깁니다.");
             return;
@@ -740,6 +1024,18 @@ public class EightWayInputMethodService extends InputMethodService
         }
     }
 
+    private void hideSystemCandidateBar() {
+        setCandidatesViewShown(false);
+    }
+
+    private View hiddenCandidatesView() {
+        View view = new View(this);
+        view.setVisibility(View.GONE);
+        view.setMinimumHeight(0);
+        view.setLayoutParams(new ViewGroup.LayoutParams(0, 0));
+        return view;
+    }
+
     private int sampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
         int inSampleSize = 1;
         int height = options.outHeight;
@@ -764,6 +1060,23 @@ public class EightWayInputMethodService extends InputMethodService
         }
         return inputClass == InputType.TYPE_CLASS_NUMBER
                 && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD;
+    }
+
+    private KeyboardMode preferredModeForEditor(EditorInfo attribute) {
+        if (isPasswordInput(attribute)) {
+            return KeyboardMode.ENGLISH;
+        }
+        if (attribute == null) {
+            return KeyboardMode.HANGUL;
+        }
+        int inputType = attribute.inputType;
+        int inputClass = inputType & InputType.TYPE_MASK_CLASS;
+        if (inputClass == InputType.TYPE_CLASS_NUMBER
+                || inputClass == InputType.TYPE_CLASS_PHONE
+                || inputClass == InputType.TYPE_CLASS_DATETIME) {
+            return KeyboardMode.NUMBERS;
+        }
+        return KeyboardMode.HANGUL;
     }
 
     private void playKeySound() {

@@ -9,6 +9,7 @@ local.properties
 *.iml
 
 # Generated packages
+dist/
 *.apk
 *.aab
 *.ap_
@@ -23,5 +24,6 @@ keystore.properties
 *.pem
 
 # OS / editor noise
+.codex-remote-attachments/
 .DS_Store
 Thumbs.db

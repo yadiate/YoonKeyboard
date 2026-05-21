@@ -15,16 +15,16 @@ public class KeySpec {
         SYMBOL_PAGE_PREV,
         SYMBOL_PAGE_NEXT,
         SHIFT,
+        SHIFT_LOCK,
         DELETE,
         SPACE,
         ENTER,
         HIDE_KEYBOARD,
         SETTINGS,
-        USEFUL_SENTENCE,
-        MY_INFO,
         CLIPBOARD_CONTEXT,
         CLIPBOARD_PASTE,
         CLIPBOARD_CLOSE,
+        CANCEL_TOUCH_DOWN,
         MOVE_LEFT,
         MOVE_RIGHT,
         NO_OP
@@ -41,14 +41,15 @@ public class KeySpec {
     public final int rowSpan;
     public final int columnSpan;
     public final int clipboardIndex;
+    public final String calibrationKey;
 
     private KeySpec(String label, Type type, String outputText, Consonant consonant, int vowelIndex, float weight) {
-        this(label, null, null, type, outputText, consonant, vowelIndex, weight, 1, 1, -1);
+        this(label, null, null, type, outputText, consonant, vowelIndex, weight, 1, 1, -1, null);
     }
 
     private KeySpec(String label, String hintTop, String hintBottom, Type type, String outputText,
                     Consonant consonant, int vowelIndex, float weight, int rowSpan, int columnSpan,
-                    int clipboardIndex) {
+                    int clipboardIndex, String calibrationKey) {
         this.label = label;
         this.hintTop = hintTop;
         this.hintBottom = hintBottom;
@@ -60,6 +61,7 @@ public class KeySpec {
         this.rowSpan = Math.max(1, rowSpan);
         this.columnSpan = Math.max(1, columnSpan);
         this.clipboardIndex = clipboardIndex;
+        this.calibrationKey = calibrationKey == null ? "" : calibrationKey;
     }
 
     public static KeySpec command(String label, Type type) {
@@ -80,7 +82,7 @@ public class KeySpec {
 
     public static KeySpec clipboardPaste(String label, int clipboardIndex, float weight) {
         return new KeySpec(label, null, null, Type.CLIPBOARD_PASTE, null, null, -1, weight, 1, 1,
-                clipboardIndex);
+                clipboardIndex, null);
     }
 
     public static KeySpec consonant(Consonant consonant) {
@@ -105,16 +107,21 @@ public class KeySpec {
 
     public KeySpec withHints(String hintTop, String hintBottom) {
         return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
-                columnSpan, clipboardIndex);
+                columnSpan, clipboardIndex, calibrationKey);
     }
 
     public KeySpec withRowSpan(int rowSpan) {
         return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
-                columnSpan, clipboardIndex);
+                columnSpan, clipboardIndex, calibrationKey);
     }
 
     public KeySpec withColumnSpan(int columnSpan) {
         return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
-                columnSpan, clipboardIndex);
+                columnSpan, clipboardIndex, calibrationKey);
+    }
+
+    public KeySpec withCalibrationKey(String calibrationKey) {
+        return new KeySpec(label, hintTop, hintBottom, type, outputText, consonant, vowelIndex, weight, rowSpan,
+                columnSpan, clipboardIndex, calibrationKey);
     }
 }

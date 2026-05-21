@@ -19,7 +19,6 @@ import android.view.WindowInsets;
 
 import com.yadiate.yoonkeyboard.SettingsStore;
 import com.yadiate.yoonkeyboard.hangul.Consonant;
-import com.yadiate.yoonkeyboard.hangul.GestureCalibration;
 import com.yadiate.yoonkeyboard.hangul.GestureVowelMapper;
 import com.yadiate.yoonkeyboard.hangul.HangulComposer;
 
@@ -32,14 +31,14 @@ import java.util.Set;
 public class KeyboardSurfaceView extends View {
     private static final float HANGUL_LEFT_KEY_WEIGHT = 1.1f;
     private static final float HANGUL_RIGHT_KEY_WEIGHT = 1.45f;
+    private static final float FOLD_SPLIT_CENTER_GAP_WEIGHT = 2.6f;
     private static final float SYMBOL_SIDE_KEY_WEIGHT = 1.05f;
     private static final float NUMBER_SIDE_KEY_WEIGHT = 1.05f;
     private static final int DEFAULT_KEYBOARD_BODY_DP = 252;
     private static final int TALL_KEYBOARD_BODY_DP = 310;
     private static final int GESTURE_START_SLOP_DP = 10;
     private static final int INVALID_POINTER_ID = -1;
-    private static final int KEY_HIT_SLOP_DP = 8;
-    private static final int LEFT_KEY_EXTRA_HIT_SLOP_DP = 5;
+    private static final int DEBUG_TOUCH_MARK_LIMIT = 80;
     private static final float LEFT_KEY_HIT_SCORE_SCALE = 0.72f;
     private static final float RIGHT_KEY_HIT_SCORE_SCALE = 1.08f;
     private static final String[][] SYMBOL_PAGES = {
@@ -59,6 +58,7 @@ public class KeyboardSurfaceView extends View {
     private final List<ClipboardClip> clipboardClips = new ArrayList<>();
     private final List<ClipboardCard> clipboardCards = new ArrayList<>();
     private final List<DeferredPointerTap> deferredPointerTaps = new ArrayList<>();
+    private final List<DebugTouchMark> debugTouchMarks = new ArrayList<>();
     private final Set<Integer> ignoredPointerIds = new HashSet<>();
     private final GestureVowelMapper gestureMapper;
     private SettingsStore.Snapshot settings;
@@ -66,6 +66,7 @@ public class KeyboardSurfaceView extends View {
     private GestureTraceListener gestureTraceListener;
     private KeyboardMode mode = KeyboardMode.HANGUL;
     private boolean shift;
+    private boolean capsLock;
     private int symbolPage;
     private int bottomSystemInset;
     private boolean bottomSafeInsetEnabled = true;
@@ -86,6 +87,9 @@ public class KeyboardSurfaceView extends View {
     private int activePointerId = INVALID_POINTER_ID;
     private float touchDownX;
     private float touchDownY;
+    private boolean debugTouchActive;
+    private float debugTouchX;
+    private float debugTouchY;
 
     public KeyboardSurfaceView(Context context) {
         super(context);
@@ -118,10 +122,23 @@ public class KeyboardSurfaceView extends View {
         setSettings(SettingsStore.load(getContext()));
     }
 
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (settings != null && settings.foldSplitKeyboardEnabled() && w != oldw) {
+            buildRows();
+            invalidate();
+        }
+    }
+
     public void setSettings(SettingsStore.Snapshot settings) {
         this.settings = settings;
         applyGestureSettings();
         setBackgroundColor(settings.theme.background);
+        if (!debugTouchOverlayEnabled()) {
+            debugTouchMarks.clear();
+            debugTouchActive = false;
+        }
         buildRows();
         requestLayout();
         invalidate();
@@ -175,7 +192,9 @@ public class KeyboardSurfaceView extends View {
 
     private void applyGestureSettings() {
         gestureMapper.setDisplayMetrics(getResources().getDisplayMetrics());
-        gestureMapper.setStrokeLengths(settings.shortStrokeMm(), settings.longStrokeMm());
+        gestureMapper.setStrokeLengths(settings.shortStrokeMm(), settings.derivationShortStrokeMm(),
+                settings.longStrokeMm());
+        gestureMapper.setBlockYeoUpToYe(settings.blockYeoUpToYe);
         gestureMapper.setCalibrationProfile(settings.gestureCalibrationEnabled
                 ? settings.gestureCalibrationProfile
                 : null);
@@ -195,6 +214,7 @@ public class KeyboardSurfaceView extends View {
         clipboardCloseRect.setEmpty();
         this.mode = mode;
         this.shift = false;
+        this.capsLock = false;
         buildRows();
         requestLayout();
         invalidate();
@@ -220,6 +240,36 @@ public class KeyboardSurfaceView extends View {
 
     public void setShift(boolean shift) {
         this.shift = shift;
+        if (shift) {
+            this.capsLock = false;
+        }
+        buildRows();
+        invalidate();
+    }
+
+    public void toggleShift() {
+        if (capsLock) {
+            capsLock = false;
+            shift = false;
+        } else {
+            shift = !shift;
+        }
+        buildRows();
+        invalidate();
+    }
+
+    public void enableCapsLock() {
+        capsLock = true;
+        shift = false;
+        buildRows();
+        invalidate();
+    }
+
+    public void consumeOneShotShift() {
+        if (!shift || capsLock) {
+            return;
+        }
+        shift = false;
         buildRows();
         invalidate();
     }
@@ -232,9 +282,22 @@ public class KeyboardSurfaceView extends View {
         return shift;
     }
 
+    public boolean isCapsLock() {
+        return capsLock;
+    }
+
+    private boolean isUppercaseMode() {
+        return shift || capsLock;
+    }
+
     public RectF currentConsonantKeyRect(Consonant consonant) {
         KeyBounds keyBounds = findConsonantKey(consonant);
         return keyBounds == null ? null : new RectF(keyBounds.rect);
+    }
+
+    public String currentConsonantCalibrationKey(Consonant consonant) {
+        KeyBounds keyBounds = findConsonantKey(consonant);
+        return keyBounds == null || keyBounds.key == null ? "" : keyBounds.key.calibrationKey;
     }
 
     @Override
@@ -294,6 +357,7 @@ public class KeyboardSurfaceView extends View {
             top += rowHeight + gap;
         }
         drawKeyPreview(canvas);
+        drawDebugTouchOverlay(canvas);
     }
 
     @Override
@@ -331,11 +395,14 @@ public class KeyboardSurfaceView extends View {
                 }
                 float moveX = event.getX(movePointerIndex);
                 float moveY = event.getY(movePointerIndex);
+                moveDebugTouch(moveX, moveY);
                 if (pressedKey == null && actionableKeyAt(moveX, moveY) != null) {
                     beginKeyTouch(moveX, moveY, event.getEventTime());
                     return true;
                 }
-                boolean dragStarted = movedBeyondGestureStartSlop(moveX, moveY);
+                boolean dragStarted = canStartDragGesture(pressedKey)
+                        && (movedBeyondGestureStartSlop(moveX, moveY)
+                        || historicalMovedBeyondGestureStartSlop(event, movePointerIndex));
                 if (dragStarted) {
                     gestureDragStarted = true;
                     cancelScheduledLongPress();
@@ -347,6 +414,7 @@ public class KeyboardSurfaceView extends View {
                     invalidate();
                 }
                 if (pressedKey == null || !pressedKey.clipboard) {
+                    appendHistoricalGesturePointsIfNeeded(event, movePointerIndex);
                     gesturePoints.add(new GestureVowelMapper.Point(moveX, moveY, event.getEventTime()));
                 }
                 if (gesturePreviewVisible && pressedKey != null && !pressedKey.clipboard) {
@@ -357,6 +425,8 @@ public class KeyboardSurfaceView extends View {
                 int pointerUpIndex = event.getActionIndex();
                 int pointerUpId = event.getPointerId(pointerUpIndex);
                 if (pointerUpId == activePointerId) {
+                    appendHistoricalGesturePointsIfNeeded(event, pointerUpIndex);
+                    endDebugTouch(event.getX(pointerUpIndex), event.getY(pointerUpIndex));
                     finishKeyTouch(event.getX(pointerUpIndex), event.getY(pointerUpIndex), event.getEventTime());
                     activePointerId = INVALID_POINTER_ID;
                     ignoredPointerIds.remove(pointerUpId);
@@ -373,6 +443,8 @@ public class KeyboardSurfaceView extends View {
                 if (upPointerIndex < 0) {
                     upPointerIndex = event.getActionIndex();
                 }
+                appendHistoricalGesturePointsIfNeeded(event, upPointerIndex);
+                endDebugTouch(event.getX(upPointerIndex), event.getY(upPointerIndex));
                 finishKeyTouch(event.getX(upPointerIndex), event.getY(upPointerIndex), event.getEventTime());
                 activePointerId = INVALID_POINTER_ID;
                 ignoredPointerIds.clear();
@@ -383,6 +455,7 @@ public class KeyboardSurfaceView extends View {
                 activePointerId = INVALID_POINTER_ID;
                 ignoredPointerIds.clear();
                 deferredPointerTaps.clear();
+                cancelDebugTouch();
                 cancelKeyTouch();
                 return true;
             default:
@@ -396,6 +469,7 @@ public class KeyboardSurfaceView extends View {
 
     private void beginKeyTouch(float x, float y, long eventTime, DeferredPointerTap deferredTap) {
         requestParentTouchIntercept(false);
+        beginDebugTouch(x, y);
         cancelScheduledLongPress();
         cancelScheduledKeyPreview();
         longPressFired = false;
@@ -469,10 +543,11 @@ public class KeyboardSurfaceView extends View {
         gesturePoints.add(new GestureVowelMapper.Point(x, y, eventTime));
         boolean keyHandledOnTouchDown = pressedKeyHandledOnTouchDown;
         boolean gestureCandidate = gestureDragStarted
-                || movedBeyondGestureStartSlop(x, y);
+                || movedBeyondGestureStartSlop(x, y)
+                || gesturePathMovedBeyondStartSlop();
         String spaceSymbol = gestureCandidate ? spaceSymbolForGesture(releasedKey) : null;
         Integer vowel = gestureCandidate && spaceSymbol == null
-                ? gestureMapper.map(gesturePoints, releasedKey.key.consonant)
+                ? gestureMapper.map(gesturePoints, releasedKey.key.consonant, releasedKey.key.calibrationKey)
                 : null;
         List<GestureVowelMapper.Point> tracedPoints = new ArrayList<>(gesturePoints);
         notifyConsonantTouch(releasedKey);
@@ -530,7 +605,8 @@ public class KeyboardSurfaceView extends View {
                 && !keyBounds.clipboard
                 && keyBounds.key != null
                 && (keyBounds.key.type == KeySpec.Type.DELETE
-                || (mode == KeyboardMode.HANGUL && keyBounds.key.type == KeySpec.Type.HANGUL_CONSONANT));
+                || (mode == KeyboardMode.HANGUL
+                && keyBounds.key.type == KeySpec.Type.HANGUL_CONSONANT));
     }
 
     private void commitPressedKeyAsTap() {
@@ -733,6 +809,14 @@ public class KeyboardSurfaceView extends View {
                 && canStartVowelGesture(key);
     }
 
+    private boolean canStartDragGesture(KeyBounds keyBounds) {
+        if (keyBounds == null || keyBounds.clipboard || keyBounds.key == null) {
+            return false;
+        }
+        return canStartVowelGesture(keyBounds.key)
+                || keyBounds.key.type == KeySpec.Type.SPACE;
+    }
+
     private boolean canStartVowelGesture(KeySpec key) {
         return key.type == KeySpec.Type.HANGUL_CONSONANT
                 || key.type == KeySpec.Type.HANGUL_VOWEL
@@ -772,7 +856,7 @@ public class KeyboardSurfaceView extends View {
     }
 
     private boolean updateGesturePreview(KeyBounds keyBounds) {
-        Integer vowel = gestureMapper.map(gesturePoints, keyBounds.key.consonant);
+        Integer vowel = gestureMapper.map(gesturePoints, keyBounds.key.consonant, keyBounds.key.calibrationKey);
         return updateGesturePreview(keyBounds, vowel);
     }
 
@@ -855,12 +939,14 @@ public class KeyboardSurfaceView extends View {
         if (keyBounds == null || listener == null || !canLongPress(keyBounds.key)) {
             return;
         }
-        if (pressedKeyHandledOnTouchDown && keyBounds.key.type == KeySpec.Type.HANGUL_CONSONANT) {
+        if (pressedKeyHandledOnTouchDown
+                && keyBounds.key.type == KeySpec.Type.HANGUL_CONSONANT
+                && !canLongPressTopHint(keyBounds.key)) {
             return;
         }
         KeySpec key = keyBounds.key;
         longPressRunnable = () -> {
-            if (pressedKey == null || pressedKey.key != key || listener == null) {
+            if (!isPressedKeyStillActive(key) || listener == null) {
                 return;
             }
             if (key.type == KeySpec.Type.DELETE) {
@@ -870,6 +956,11 @@ public class KeyboardSurfaceView extends View {
             longPressFired = true;
             gesturePoints.clear();
             longPressRunnable = null;
+            if (pressedKeyHandledOnTouchDown
+                    && key.type == KeySpec.Type.HANGUL_CONSONANT
+                    && canLongPressTopHint(key)) {
+                listener.onKey(KeySpec.command("", KeySpec.Type.CANCEL_TOUCH_DOWN));
+            }
             listener.onKey(longPressKeyFor(key));
             invalidate();
         };
@@ -877,7 +968,10 @@ public class KeyboardSurfaceView extends View {
     }
 
     private boolean canLongPress(KeySpec key) {
-        return key.type == KeySpec.Type.DELETE || canLongPressTopHint(key) || canLongPressClipboardContext(key);
+        return key.type == KeySpec.Type.DELETE
+                || canLongPressShiftLock(key)
+                || canLongPressTopHint(key)
+                || canLongPressClipboardContext(key);
     }
 
     private int longPressDelayMs(KeySpec key) {
@@ -888,10 +982,10 @@ public class KeyboardSurfaceView extends View {
     }
 
     private boolean canLongPressTopHint(KeySpec key) {
-        if (mode != KeyboardMode.HANGUL && mode != KeyboardMode.ENGLISH) {
+        if (!modeSupportsTopHintLongPress()) {
             return false;
         }
-        if (key.hintTop == null || key.hintTop.isEmpty()) {
+        if (key.hintTop == null || key.hintTop.trim().isEmpty()) {
             return false;
         }
         return key.type == KeySpec.Type.CHARACTER
@@ -899,11 +993,25 @@ public class KeyboardSurfaceView extends View {
                 || key.type == KeySpec.Type.HANGUL_VOWEL;
     }
 
+    private boolean modeSupportsTopHintLongPress() {
+        return mode == KeyboardMode.HANGUL
+                || mode == KeyboardMode.ENGLISH
+                || mode == KeyboardMode.NUMBERS
+                || mode == KeyboardMode.SYMBOLS;
+    }
+
+    private boolean canLongPressShiftLock(KeySpec key) {
+        return mode == KeyboardMode.ENGLISH && key.type == KeySpec.Type.SHIFT;
+    }
+
     private boolean canLongPressClipboardContext(KeySpec key) {
         return !clipboardContextVisible && mode == KeyboardMode.HANGUL && key.type == KeySpec.Type.SETTINGS;
     }
 
     private KeySpec longPressKeyFor(KeySpec key) {
+        if (canLongPressShiftLock(key)) {
+            return KeySpec.command("", KeySpec.Type.SHIFT_LOCK);
+        }
         if (canLongPressClipboardContext(key)) {
             return KeySpec.command("", KeySpec.Type.CLIPBOARD_CONTEXT);
         }
@@ -914,11 +1022,10 @@ public class KeyboardSurfaceView extends View {
         longPressFired = true;
         gesturePoints.clear();
         longPressRunnable = null;
-        listener.onKey(key);
         deleteRepeatRunnable = new Runnable() {
             @Override
             public void run() {
-                if (pressedKey == null || pressedKey.key != key || listener == null) {
+                if (!isPressedKeyStillActive(key) || listener == null) {
                     deleteRepeatRunnable = null;
                     return;
                 }
@@ -928,6 +1035,16 @@ public class KeyboardSurfaceView extends View {
         };
         postDelayed(deleteRepeatRunnable, deleteRepeatIntervalMs());
         invalidate();
+    }
+
+    private boolean isPressedKeyStillActive(KeySpec expectedKey) {
+        if (pressedKey == null || pressedKey.key == null) {
+            return false;
+        }
+        if (expectedKey.type == KeySpec.Type.DELETE) {
+            return pressedKey.key.type == KeySpec.Type.DELETE;
+        }
+        return pressedKey.key == expectedKey;
     }
 
     private int deleteRepeatStartMs() {
@@ -966,6 +1083,42 @@ public class KeyboardSurfaceView extends View {
         return Math.hypot(dx, dy) > gestureStartSlopPx();
     }
 
+    private boolean historicalMovedBeyondGestureStartSlop(MotionEvent event, int pointerIndex) {
+        for (int i = 0; i < event.getHistorySize(); i++) {
+            if (movedBeyondGestureStartSlop(
+                    event.getHistoricalX(pointerIndex, i),
+                    event.getHistoricalY(pointerIndex, i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean gesturePathMovedBeyondStartSlop() {
+        for (GestureVowelMapper.Point point : gesturePoints) {
+            if (movedBeyondGestureStartSlop(point.x, point.y)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void appendHistoricalGesturePoints(MotionEvent event, int pointerIndex) {
+        for (int i = 0; i < event.getHistorySize(); i++) {
+            gesturePoints.add(new GestureVowelMapper.Point(
+                    event.getHistoricalX(pointerIndex, i),
+                    event.getHistoricalY(pointerIndex, i),
+                    event.getHistoricalEventTime(i)));
+        }
+    }
+
+    private void appendHistoricalGesturePointsIfNeeded(MotionEvent event, int pointerIndex) {
+        if (pointerIndex < 0 || (pressedKey != null && pressedKey.clipboard)) {
+            return;
+        }
+        appendHistoricalGesturePoints(event, pointerIndex);
+    }
+
     private float gestureStartSlopPx() {
         float defaultSlop = dp(GESTURE_START_SLOP_DP);
         if (settings == null) {
@@ -981,6 +1134,57 @@ public class KeyboardSurfaceView extends View {
 
     private boolean reasonableDpi(float dpi) {
         return dpi >= 80f && dpi <= 900f;
+    }
+
+    private boolean debugTouchOverlayEnabled() {
+        return settings != null && settings.debugTouchOverlay;
+    }
+
+    private void beginDebugTouch(float x, float y) {
+        if (!debugTouchOverlayEnabled() || clipboardContextVisible) {
+            return;
+        }
+        debugTouchActive = true;
+        debugTouchX = x;
+        debugTouchY = y;
+        addDebugTouchMark(x, y, true);
+    }
+
+    private void moveDebugTouch(float x, float y) {
+        if (!debugTouchOverlayEnabled() || !debugTouchActive) {
+            return;
+        }
+        debugTouchX = x;
+        debugTouchY = y;
+        invalidate();
+    }
+
+    private void endDebugTouch(float x, float y) {
+        if (!debugTouchOverlayEnabled()) {
+            debugTouchActive = false;
+            return;
+        }
+        if (debugTouchActive) {
+            addDebugTouchMark(x, y, false);
+        }
+        debugTouchActive = false;
+        invalidate();
+    }
+
+    private void cancelDebugTouch() {
+        if (debugTouchOverlayEnabled() && debugTouchActive) {
+            addDebugTouchMark(debugTouchX, debugTouchY, false);
+        }
+        debugTouchActive = false;
+        invalidate();
+    }
+
+    private void addDebugTouchMark(float x, float y, boolean down) {
+        debugTouchMarks.add(new DebugTouchMark(x, y, down));
+        while (debugTouchMarks.size() > DEBUG_TOUCH_MARK_LIMIT) {
+            debugTouchMarks.remove(0);
+        }
+        invalidate();
     }
 
     private void drawKeyPreview(Canvas canvas) {
@@ -1033,6 +1237,95 @@ public class KeyboardSurfaceView extends View {
         paint.setColor(theme.text);
         paint.setTextSize(dp(label.length() > 1 ? 28 : 38));
         drawCenteredText(canvas, label, bubbleRect.centerX(), bubbleRect.centerY());
+    }
+
+    private void drawDebugTouchOverlay(Canvas canvas) {
+        if (!debugTouchOverlayEnabled() || clipboardContextVisible) {
+            return;
+        }
+        drawDebugHitBoxes(canvas);
+        drawDebugTouchMarks(canvas);
+    }
+
+    private void drawDebugHitBoxes(Canvas canvas) {
+        float gap = dp(4);
+        float top = gap;
+        float keyboardHeight = keyboardHeight();
+        float rowHeight = (keyboardHeight - gap * (rows.size() + 1)) / rows.size();
+        paint.setShader(null);
+        paint.setTextAlign(Paint.Align.LEFT);
+        for (RowLayout row : rows) {
+            float totalWeight = row.totalWeight();
+            float contentLeft = keyboardLeftInset();
+            float left = contentLeft + gap;
+            float availableWidth = keyboardContentWidth() - gap * (row.keys.size() + 1);
+            for (int i = 0; i < row.keys.size(); i++) {
+                KeySpec key = row.keys.get(i);
+                float keyWidth = availableWidth * (key.weight / totalWeight);
+                RectF rect = new RectF(left, top, left + keyWidth, top + rowHeight);
+                RectF touchRect = spanRect(row, i, rect, rowHeight, gap, availableWidth, totalWeight);
+                if (key.type != KeySpec.Type.NO_OP) {
+                    RectF hitRect = expandedKeyHitRect(touchRect, gap, key);
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(Color.argb(36, 255, 59, 48));
+                    canvas.drawRoundRect(hitRect, dp(5), dp(5), paint);
+                    paint.setStyle(Paint.Style.STROKE);
+                    paint.setStrokeWidth(dp(1.2f));
+                    paint.setColor(Color.argb(210, 255, 59, 48));
+                    canvas.drawRoundRect(hitRect, dp(5), dp(5), paint);
+                    paint.setStrokeWidth(dp(1f));
+                    paint.setColor(Color.argb(170, 0, 122, 255));
+                    canvas.drawRoundRect(touchRect, dp(5), dp(5), paint);
+                    if (pressedKey != null && pressedKey.key == key) {
+                        paint.setStrokeWidth(dp(3f));
+                        paint.setColor(Color.argb(230, 52, 199, 89));
+                        canvas.drawRoundRect(hitRect, dp(5), dp(5), paint);
+                    }
+                    String label = primaryKeyLabel(key);
+                    if (!label.isEmpty()) {
+                        paint.setStyle(Paint.Style.FILL);
+                        paint.setColor(Color.argb(225, 20, 20, 24));
+                        paint.setTextSize(dp(9));
+                        canvas.drawText(label, hitRect.left + dp(3), hitRect.top + dp(11), paint);
+                    }
+                }
+                left += keyWidth + gap;
+            }
+            top += rowHeight + gap;
+        }
+    }
+
+    private void drawDebugTouchMarks(Canvas canvas) {
+        paint.setShader(null);
+        paint.setStrokeWidth(dp(2f));
+        for (int i = 0; i < debugTouchMarks.size(); i++) {
+            DebugTouchMark mark = debugTouchMarks.get(i);
+            float radius = mark.down ? dp(6f) : dp(8f);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(mark.down
+                    ? Color.argb(150, 0, 122, 255)
+                    : Color.argb(110, 255, 149, 0));
+            canvas.drawCircle(mark.x, mark.y, radius, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setColor(mark.down
+                    ? Color.argb(235, 0, 122, 255)
+                    : Color.argb(235, 255, 149, 0));
+            canvas.drawCircle(mark.x, mark.y, radius, paint);
+            if (!mark.down) {
+                canvas.drawLine(mark.x - radius, mark.y, mark.x + radius, mark.y, paint);
+                canvas.drawLine(mark.x, mark.y - radius, mark.x, mark.y + radius, paint);
+            }
+        }
+        if (debugTouchActive) {
+            float radius = dp(12f);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(80, 52, 199, 89));
+            canvas.drawCircle(debugTouchX, debugTouchY, radius, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(3f));
+            paint.setColor(Color.argb(240, 52, 199, 89));
+            canvas.drawCircle(debugTouchX, debugTouchY, radius, paint);
+        }
     }
 
     private boolean canShowKeyPreview(KeySpec key) {
@@ -1141,6 +1434,7 @@ public class KeyboardSurfaceView extends View {
                 ? theme.enterKey
                 : (special ? theme.keySpecial : theme.keyNormal);
         drawRaisedKeyBackground(canvas, rect, pressed ? theme.keyPressed : keyColor, pressed, dp(8));
+        drawShiftModeDot(canvas, key, rect);
 
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(key.type == KeySpec.Type.ENTER
@@ -1176,6 +1470,16 @@ public class KeyboardSurfaceView extends View {
         for (int i = 0; i < labelLines.length; i++) {
             canvas.drawText(labelLines[i], rect.centerX(), firstBaseline + lineHeight * i, paint);
         }
+    }
+
+    private void drawShiftModeDot(Canvas canvas, KeySpec key, RectF rect) {
+        if (key.type != KeySpec.Type.SHIFT || (!shift && !capsLock)) {
+            return;
+        }
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(capsLock ? Color.rgb(224, 57, 57) : Color.rgb(42, 176, 94));
+        canvas.drawCircle(rect.right - dp(12), rect.top + dp(12), dp(4), paint);
     }
 
     private boolean isCompactLabel(String label) {
@@ -1452,7 +1756,7 @@ public class KeyboardSurfaceView extends View {
                 if (key.type != KeySpec.Type.NO_OP) {
                     RectF hitRect = expandedKeyHitRect(touchRect, gap, key);
                     if (hitRect.contains(x, y)) {
-                        float score = adjustedHitScore(x, y, touchRect, key);
+                        float score = adjustedHitScore(x, y, hitRect, key);
                         int priority = hitPriority(key);
                         if (score < bestScore
                                 || (Math.abs(score - bestScore) <= dp(3) * dp(3)
@@ -1575,38 +1879,53 @@ public class KeyboardSurfaceView extends View {
     }
 
     private RectF expandedKeyHitRect(RectF rect, float gap, KeySpec key) {
-        float slop = Math.max(gap / 2f, dp(KEY_HIT_SLOP_DP));
+        float baseSlop = dp(hitboxBaseDp());
+        float leftCut = Math.min(rect.width() * 0.18f, dp(hitboxLeftCutDp()));
+        float topCut = Math.min(rect.height() * 0.18f, dp(hitboxTopCutDp()));
+        float rightSlop = baseSlop + dp(hitboxRightExtraDp());
+        float bottomSlop = baseSlop + dp(hitboxBottomExtraDp());
         if (isLeftTextKey(rect, key)) {
-            slop += dp(LEFT_KEY_EXTRA_HIT_SLOP_DP);
+            rightSlop += dp(hitboxLeftKeyRightExtraDp());
         }
         float contentLeft = keyboardLeftInset();
         float contentRight = contentLeft + keyboardContentWidth();
         float keyboardTop = 0f;
         float keyboardBottom = keyboardHeight();
         RectF hitRect = new RectF(
-                Math.max(contentLeft, rect.left - slop),
-                Math.max(keyboardTop, rect.top - slop),
-                Math.min(contentRight, rect.right + slop),
-                Math.min(keyboardBottom, rect.bottom + slop));
-        GestureCalibration.TouchProfile touchProfile = consonantTouchProfile(key);
-        if (touchProfile != null) {
-            float offsetX = touchProfile.centerOffsetXRatio * rect.width();
-            float offsetY = touchProfile.centerOffsetYRatio * rect.height();
-            float extraX = Math.max(dp(3), rect.width() * touchProfile.extraSlopRatio);
-            float extraY = Math.max(dp(3), rect.height() * touchProfile.extraSlopRatio);
-            hitRect.union(new RectF(
-                    Math.max(contentLeft, rect.left + offsetX - extraX),
-                    Math.max(keyboardTop, rect.top + offsetY - extraY),
-                    Math.min(contentRight, rect.right + offsetX + extraX),
-                    Math.min(keyboardBottom, rect.bottom + offsetY + extraY)));
-        }
+                Math.max(contentLeft, rect.left + leftCut),
+                Math.max(keyboardTop, rect.top + topCut),
+                Math.min(contentRight, rect.right + rightSlop),
+                Math.min(keyboardBottom, rect.bottom + bottomSlop));
         return hitRect;
     }
 
+    private int hitboxBaseDp() {
+        return settings == null ? SettingsStore.DEFAULT_HITBOX_BASE_DP : settings.hitboxBaseDp;
+    }
+
+    private int hitboxLeftCutDp() {
+        return settings == null ? SettingsStore.DEFAULT_HITBOX_LEFT_CUT_DP : settings.hitboxLeftCutDp;
+    }
+
+    private int hitboxTopCutDp() {
+        return settings == null ? SettingsStore.DEFAULT_HITBOX_TOP_CUT_DP : settings.hitboxTopCutDp;
+    }
+
+    private int hitboxRightExtraDp() {
+        return settings == null ? SettingsStore.DEFAULT_HITBOX_RIGHT_EXTRA_DP : settings.hitboxRightExtraDp;
+    }
+
+    private int hitboxBottomExtraDp() {
+        return settings == null ? SettingsStore.DEFAULT_HITBOX_BOTTOM_EXTRA_DP : settings.hitboxBottomExtraDp;
+    }
+
+    private int hitboxLeftKeyRightExtraDp() {
+        return settings == null ? SettingsStore.DEFAULT_HITBOX_LEFT_KEY_RIGHT_EXTRA_DP
+                : settings.hitboxLeftKeyRightExtraDp;
+    }
+
     private float adjustedHitScore(float x, float y, RectF rect, KeySpec key) {
-        float score = isTextInputKey(key)
-                ? calibratedCenterScore(x, y, rect, key)
-                : distanceToRectScore(x, y, rect);
+        float score = distanceToRectScore(x, y, rect);
         if (isLeftTextKey(rect, key)) {
             return score * LEFT_KEY_HIT_SCORE_SCALE;
         }
@@ -1614,31 +1933,6 @@ public class KeyboardSurfaceView extends View {
             return score * RIGHT_KEY_HIT_SCORE_SCALE;
         }
         return score;
-    }
-
-    private float calibratedCenterScore(float x, float y, RectF rect, KeySpec key) {
-        GestureCalibration.TouchProfile touchProfile = consonantTouchProfile(key);
-        float centerX = rect.centerX();
-        float centerY = rect.centerY();
-        if (touchProfile != null) {
-            centerX += touchProfile.centerOffsetXRatio * rect.width();
-            centerY += touchProfile.centerOffsetYRatio * rect.height();
-        }
-        float dx = x - centerX;
-        float dy = (y - centerY) * 1.08f;
-        return dx * dx + dy * dy;
-    }
-
-    private GestureCalibration.TouchProfile consonantTouchProfile(KeySpec key) {
-        if (settings == null
-                || !settings.gestureCalibrationEnabled
-                || settings.gestureCalibrationProfile == null
-                || key == null
-                || key.type != KeySpec.Type.HANGUL_CONSONANT
-                || key.consonant == null) {
-            return null;
-        }
-        return settings.gestureCalibrationProfile.touchProfile(key.consonant);
     }
 
     private float distanceToRectScore(float x, float y, RectF rect) {
@@ -1773,30 +2067,37 @@ public class KeyboardSurfaceView extends View {
             Consonant row1First, Consonant row1Second, Consonant row1Third, Consonant row1Fourth, Consonant row1Fifth,
             Consonant row2First, Consonant row2Second, Consonant row2Third, Consonant row2Fourth, Consonant row2Fifth,
             Consonant row3First, Consonant row3Second, Consonant row3Third, Consonant row3Fourth) {
+        if (useFoldSplitHangulLayout()) {
+            buildGestureHangulFoldSplitRows(
+                    row1First, row1Second, row1Third, row1Fourth, row1Fifth,
+                    row2First, row2Second, row2Third, row2Fourth, row2Fifth,
+                    row3First, row3Second, row3Third, row3Fourth);
+            return;
+        }
         float leftKeyWeight = hangulLeftKeyWeight();
         float rightKeyWeight = hangulRightKeyWeight();
         rows.add(row(
                 KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, leftKeyWeight),
-                KeySpec.consonant(row1First).withHints("1", null),
-                KeySpec.consonant(row1Second).withHints("2", null),
-                KeySpec.consonant(row1Third).withHints("3", null),
-                KeySpec.consonant(row1Fourth).withHints("4", null),
-                KeySpec.consonant(row1Fifth).withHints("5", null),
+                gestureConsonantKey(row1First, 0, 0, "1"),
+                gestureConsonantKey(row1Second, 0, 1, "2"),
+                gestureConsonantKey(row1Third, 0, 2, "3"),
+                gestureConsonantKey(row1Fourth, 0, 3, "4"),
+                gestureConsonantKey(row1Fifth, 0, 4, "5"),
                 KeySpec.command("DEL\n←", KeySpec.Type.DELETE, rightKeyWeight).withRowSpan(3)));
         rows.add(row(
                 KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, leftKeyWeight),
-                KeySpec.consonant(row2First).withHints("6", null),
-                KeySpec.consonant(row2Second).withHints("7", null),
-                KeySpec.consonant(row2Third).withHints("8", null),
-                KeySpec.consonant(row2Fourth).withHints("9", null),
-                KeySpec.consonant(row2Fifth).withHints("0", null),
+                gestureConsonantKey(row2First, 1, 0, "6"),
+                gestureConsonantKey(row2Second, 1, 1, "7"),
+                gestureConsonantKey(row2Third, 1, 2, "8"),
+                gestureConsonantKey(row2Fourth, 1, 3, "9"),
+                gestureConsonantKey(row2Fifth, 1, 4, "0"),
                 KeySpec.spacer(rightKeyWeight)));
         rows.add(row(
                 KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, leftKeyWeight),
-                KeySpec.consonant(row3First),
-                KeySpec.consonant(row3Second),
-                KeySpec.consonant(row3Third),
-                KeySpec.consonant(row3Fourth),
+                gestureConsonantKey(row3First, 2, 0, null),
+                gestureConsonantKey(row3Second, 2, 1, null),
+                gestureConsonantKey(row3Third, 2, 2, null),
+                gestureConsonantKey(row3Fourth, 2, 3, null),
                 KeySpec.vowelPad("모음", 1.0f),
                 KeySpec.spacer(rightKeyWeight)));
         rows.add(row(
@@ -1809,6 +2110,99 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.spacer(rightKeyWeight)));
     }
 
+    private void buildGestureHangulFoldSplitRows(
+            Consonant row1First, Consonant row1Second, Consonant row1Third, Consonant row1Fourth, Consonant row1Fifth,
+            Consonant row2First, Consonant row2Second, Consonant row2Third, Consonant row2Fourth, Consonant row2Fifth,
+            Consonant row3First, Consonant row3Second, Consonant row3Third, Consonant row3Fourth) {
+        float leftKeyWeight = Math.max(0.9f, hangulLeftKeyWeight());
+        float rightKeyWeight = Math.max(1.15f, hangulRightKeyWeight());
+        rows.add(row(
+                KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, leftKeyWeight),
+                gestureConsonantKey(row1First, 0, 0, "1"),
+                gestureConsonantKey(row1Second, 0, 1, "2"),
+                KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
+                gestureConsonantKey(row1Third, 0, 2, "3"),
+                gestureConsonantKey(row1Fourth, 0, 3, "4"),
+                gestureConsonantKey(row1Fifth, 0, 4, "5"),
+                KeySpec.command("DEL\n←", KeySpec.Type.DELETE, rightKeyWeight).withRowSpan(3)));
+        rows.add(row(
+                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, leftKeyWeight),
+                gestureConsonantKey(row2First, 1, 0, "6"),
+                gestureConsonantKey(row2Second, 1, 1, "7"),
+                KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
+                gestureConsonantKey(row2Third, 1, 2, "8"),
+                gestureConsonantKey(row2Fourth, 1, 3, "9"),
+                gestureConsonantKey(row2Fifth, 1, 4, "0"),
+                KeySpec.spacer(rightKeyWeight)));
+        rows.add(row(
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, leftKeyWeight),
+                gestureConsonantKey(row3First, 2, 0, null),
+                gestureConsonantKey(row3Second, 2, 1, null),
+                KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
+                gestureConsonantKey(row3Third, 2, 2, null),
+                gestureConsonantKey(row3Fourth, 2, 3, null),
+                KeySpec.vowelPad("모음", 1.0f),
+                KeySpec.spacer(rightKeyWeight)));
+        rows.add(row(
+                KeySpec.command("⚙", KeySpec.Type.SETTINGS, leftKeyWeight),
+                KeySpec.command("←", KeySpec.Type.MOVE_LEFT),
+                KeySpec.command("→", KeySpec.Type.MOVE_RIGHT),
+                KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
+                KeySpec.command("!\n? ㅡ .", KeySpec.Type.SPACE).withHints("~   ,", null).withColumnSpan(2),
+                KeySpec.spacer(1.0f),
+                KeySpec.command("Go", KeySpec.Type.ENTER).withColumnSpan(2),
+                KeySpec.spacer(rightKeyWeight)));
+    }
+
+    private boolean useFoldSplitHangulLayout() {
+        return settings != null
+                && settings.foldSplitKeyboardEnabled()
+                && getWidth() >= dp(600);
+    }
+
+    private KeySpec gestureConsonantKey(Consonant consonant, int row, int column) {
+        return gestureConsonantKey(consonant, row, column, null);
+    }
+
+    private KeySpec gestureConsonantKey(Consonant consonant, int row, int column, String fallbackTopHint) {
+        return withHangulConsonantTopHint(
+                KeySpec.consonant(consonant).withCalibrationKey(gestureCalibrationKey(row, column)),
+                consonant,
+                fallbackTopHint);
+    }
+
+    private String gestureCalibrationKey(int row, int column) {
+        return "hangul_gesture_r" + row + "_c" + column;
+    }
+
+    private KeySpec qwertyConsonantKey(Consonant consonant, int row, int column) {
+        return withHangulConsonantTopHint(
+                KeySpec.consonant(consonant).withCalibrationKey("hangul_qwerty_r" + row + "_c" + column),
+                consonant,
+                null);
+    }
+
+    private KeySpec withHangulConsonantTopHint(KeySpec key, Consonant consonant, String fallbackTopHint) {
+        String topHint = hangulConsonantTopHint(consonant, fallbackTopHint);
+        return key.withHints(topHint, null);
+    }
+
+    private String hangulConsonantTopHint(Consonant consonant, String fallbackTopHint) {
+        if (consonant == Consonant.KIEUK) {
+            return "@";
+        }
+        if (consonant == Consonant.TIEUT) {
+            return "&";
+        }
+        if (consonant == Consonant.CHIEUT) {
+            return "-";
+        }
+        if (consonant == Consonant.PIEUP) {
+            return "_";
+        }
+        return fallbackTopHint;
+    }
+
     private float hangulLeftKeyWeight() {
         return settings == null ? HANGUL_LEFT_KEY_WEIGHT : settings.hangulLeftColumnWeight(5f);
     }
@@ -1819,11 +2213,11 @@ public class KeyboardSurfaceView extends View {
 
     private void buildHangulQwertyVerticalRows() {
         rows.add(row(
-                KeySpec.consonant(shift ? Consonant.SSANG_BIEUP : Consonant.BIEUP),
-                KeySpec.consonant(shift ? Consonant.SSANG_JIEUT : Consonant.JIEUT),
-                KeySpec.consonant(shift ? Consonant.SSANG_DIGEUT : Consonant.DIGEUT),
-                KeySpec.consonant(shift ? Consonant.SSANG_GIYEOK : Consonant.GIYEOK),
-                KeySpec.consonant(shift ? Consonant.SSANG_SIOT : Consonant.SIOT)));
+                qwertyConsonantKey(shift ? Consonant.SSANG_BIEUP : Consonant.BIEUP, 0, 0),
+                qwertyConsonantKey(shift ? Consonant.SSANG_JIEUT : Consonant.JIEUT, 0, 1),
+                qwertyConsonantKey(shift ? Consonant.SSANG_DIGEUT : Consonant.DIGEUT, 0, 2),
+                qwertyConsonantKey(shift ? Consonant.SSANG_GIYEOK : Consonant.GIYEOK, 0, 3),
+                qwertyConsonantKey(shift ? Consonant.SSANG_SIOT : Consonant.SIOT, 0, 4)));
         rows.add(row(
                 KeySpec.vowel("ㅛ", HangulComposer.V_YO),
                 KeySpec.vowel("ㅕ", HangulComposer.V_YEO),
@@ -1831,11 +2225,11 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.vowel("ㅐ", HangulComposer.V_AE),
                 KeySpec.vowel("ㅔ", HangulComposer.V_E)));
         rows.add(row(
-                KeySpec.consonant(Consonant.MIEUM),
-                KeySpec.consonant(Consonant.NIEUN),
-                KeySpec.consonant(Consonant.IEUNG),
-                KeySpec.consonant(Consonant.RIEUL),
-                KeySpec.consonant(Consonant.HIEUT)));
+                qwertyConsonantKey(Consonant.MIEUM, 2, 0),
+                qwertyConsonantKey(Consonant.NIEUN, 2, 1),
+                qwertyConsonantKey(Consonant.IEUNG, 2, 2),
+                qwertyConsonantKey(Consonant.RIEUL, 2, 3),
+                qwertyConsonantKey(Consonant.HIEUT, 2, 4)));
         rows.add(row(
                 KeySpec.vowel("ㅗ", HangulComposer.V_O),
                 KeySpec.vowel("ㅓ", HangulComposer.V_EO),
@@ -1844,57 +2238,56 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.command("⌫", KeySpec.Type.DELETE)));
         rows.add(row(
                 KeySpec.command(shift ? "SHIFT" : "shift", KeySpec.Type.SHIFT, 1.4f),
-                KeySpec.consonant(Consonant.KIEUK),
-                KeySpec.consonant(Consonant.TIEUT),
-                KeySpec.consonant(Consonant.CHIEUT),
-                KeySpec.consonant(Consonant.PIEUP),
+                qwertyConsonantKey(Consonant.KIEUK, 4, 1),
+                qwertyConsonantKey(Consonant.TIEUT, 4, 2),
+                qwertyConsonantKey(Consonant.CHIEUT, 4, 3),
+                qwertyConsonantKey(Consonant.PIEUP, 4, 4),
                 KeySpec.vowel("ㅠ", HangulComposer.V_YU),
                 KeySpec.vowel("ㅜ", HangulComposer.V_U),
                 KeySpec.vowel("ㅡ", HangulComposer.V_EU)));
         rows.add(row(
+                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.1f),
                 KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, 1.1f),
                 KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, 1.1f),
                 KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.1f),
-                KeySpec.command("메뉴", KeySpec.Type.SETTINGS, 1.1f),
-                KeySpec.command("문구", KeySpec.Type.USEFUL_SENTENCE, 1.1f),
                 KeySpec.command("space", KeySpec.Type.SPACE, 3.6f),
                 KeySpec.command("↵", KeySpec.Type.ENTER, 1.1f)));
     }
 
     private void buildHangulQwertyRows() {
         rows.add(row(
-                KeySpec.consonant(Consonant.BIEUP),
-                KeySpec.consonant(Consonant.JIEUT),
-                KeySpec.consonant(Consonant.DIGEUT),
-                KeySpec.consonant(Consonant.GIYEOK),
-                KeySpec.consonant(Consonant.SIOT),
+                qwertyConsonantKey(Consonant.BIEUP, 0, 0),
+                qwertyConsonantKey(Consonant.JIEUT, 0, 1),
+                qwertyConsonantKey(Consonant.DIGEUT, 0, 2),
+                qwertyConsonantKey(Consonant.GIYEOK, 0, 3),
+                qwertyConsonantKey(Consonant.SIOT, 0, 4),
                 KeySpec.vowel("ㅛ", HangulComposer.V_YO),
                 KeySpec.vowel("ㅕ", HangulComposer.V_YEO),
                 KeySpec.vowel("ㅑ", HangulComposer.V_YA),
                 KeySpec.vowel("ㅐ", HangulComposer.V_AE),
                 KeySpec.vowel("ㅔ", HangulComposer.V_E)));
         rows.add(row(
-                KeySpec.consonant(Consonant.MIEUM),
-                KeySpec.consonant(Consonant.NIEUN),
-                KeySpec.consonant(Consonant.IEUNG),
-                KeySpec.consonant(Consonant.RIEUL),
-                KeySpec.consonant(Consonant.HIEUT),
+                qwertyConsonantKey(Consonant.MIEUM, 1, 0),
+                qwertyConsonantKey(Consonant.NIEUN, 1, 1),
+                qwertyConsonantKey(Consonant.IEUNG, 1, 2),
+                qwertyConsonantKey(Consonant.RIEUL, 1, 3),
+                qwertyConsonantKey(Consonant.HIEUT, 1, 4),
                 KeySpec.vowel("ㅗ", HangulComposer.V_O),
                 KeySpec.vowel("ㅓ", HangulComposer.V_EO),
                 KeySpec.vowel("ㅏ", HangulComposer.V_A),
                 KeySpec.vowel("ㅣ", HangulComposer.V_I)));
         rows.add(row(
-                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.1f),
-                KeySpec.consonant(Consonant.KIEUK),
-                KeySpec.consonant(Consonant.TIEUT),
-                KeySpec.consonant(Consonant.CHIEUT),
-                KeySpec.consonant(Consonant.PIEUP),
+                qwertyConsonantKey(Consonant.KIEUK, 2, 0),
+                qwertyConsonantKey(Consonant.TIEUT, 2, 1),
+                qwertyConsonantKey(Consonant.CHIEUT, 2, 2),
+                qwertyConsonantKey(Consonant.PIEUP, 2, 3),
                 KeySpec.vowel("ㅠ", HangulComposer.V_YU),
                 KeySpec.vowel("ㅜ", HangulComposer.V_U),
                 KeySpec.vowel("ㅡ", HangulComposer.V_EU),
                 KeySpec.character(".,", "."),
                 KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(
+                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.05f),
                 KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, 1.05f),
                 KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.05f),
                 KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.05f),
@@ -1933,7 +2326,7 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("l", "|", "ㅣ"),
                 KeySpec.spacer(0.5f)));
         rows.add(row(
-                KeySpec.command("⇧\nA", KeySpec.Type.SHIFT, 1.5f),
+                KeySpec.command(isUppercaseMode() ? "SHIFT" : "shift", KeySpec.Type.SHIFT, 1.5f),
                 qwertyKey("z", "<", "ㅋ"),
                 qwertyKey("x", ">", "ㅌ"),
                 qwertyKey("c", "[", "ㅊ"),
@@ -1951,9 +2344,8 @@ public class KeyboardSurfaceView extends View {
     }
 
     private KeySpec qwertyKey(String value, String topHint, String bottomHint) {
-        String label = value.toUpperCase();
-        String outputText = shift ? value.toUpperCase() : value;
-        return KeySpec.character(label, outputText).withHints(topHint, bottomHint);
+        String text = isUppercaseMode() ? value.toUpperCase() : value;
+        return KeySpec.character(text, text).withHints(topHint, bottomHint);
     }
 
     private void buildEnglishPalgeulRows() {
@@ -1962,7 +2354,8 @@ public class KeyboardSurfaceView extends View {
                 letter("a"), letter("f"), letter("k"), letter("p"), letter("u"),
                 KeySpec.command("⌫", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(letter("b"), letter("g"), letter("l"), letter("q"), letter("v"), KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS)));
-        rows.add(row(letter("c"), letter("h"), letter("m"), letter("r"), letter("w"), KeySpec.command(shift ? "SHIFT" : "shift", KeySpec.Type.SHIFT)));
+        rows.add(row(letter("c"), letter("h"), letter("m"), letter("r"), letter("w"),
+                KeySpec.command(isUppercaseMode() ? "SHIFT" : "shift", KeySpec.Type.SHIFT)));
         rows.add(row(letter("d"), letter("i"), letter("n"), letter("s"), letter("x"), KeySpec.command("123", KeySpec.Type.MODE_NUMBERS)));
         rows.add(row(letter("e"), letter("j"), letter("o"), letter("t"), letter("y"), letter("z"),
                 KeySpec.command("space", KeySpec.Type.SPACE, 2.2f),
@@ -1970,7 +2363,7 @@ public class KeyboardSurfaceView extends View {
     }
 
     private KeySpec letter(String value) {
-        String text = shift ? value.toUpperCase() : value;
+        String text = isUppercaseMode() ? value.toUpperCase() : value;
         return KeySpec.character(text, text);
     }
 
@@ -2143,6 +2536,18 @@ public class KeyboardSurfaceView extends View {
             this.key = key;
             this.rect = rect;
             this.clipboard = clipboard;
+        }
+    }
+
+    private static class DebugTouchMark {
+        final float x;
+        final float y;
+        final boolean down;
+
+        DebugTouchMark(float x, float y, boolean down) {
+            this.x = x;
+            this.y = y;
+            this.down = down;
         }
     }
 

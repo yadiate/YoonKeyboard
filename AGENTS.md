@@ -43,6 +43,77 @@
   - 긴 세로: ㅣ
   - 복합 제스처로 ㅐ/ㅔ/ㅒ/ㅖ/ㅘ/ㅙ/ㅚ/ㅞ/ㅟ/ㅝ/ㅢ 계열 처리
 
+## APK 분석/추출 절차
+
+원본 APK를 다시 확인해야 할 때는 클린룸 원칙을 유지한다. 원본 코드, 이미지, 리소스를 새 앱에 복사하지 말고, 패키지 구조·레이아웃 이름·동작 흐름·상수 형태만 참고한다.
+
+PowerShell 기준 기본 작업 폴더:
+
+```powershell
+$root = "C:\Users\yadia\Documents\Codex\2026-05-18\apk\EightWayIme"
+$src = "C:\Users\yadia\Downloads\팔방미글_base.apk"
+$work = Join-Path $root ".codex_apk_analysis"
+$buildTools = "C:\Users\yadia\AppData\Local\Android\Sdk\build-tools\35.0.0"
+
+New-Item -ItemType Directory -Force -Path $work | Out-Null
+Copy-Item -LiteralPath $src -Destination (Join-Path $work "palbang_base.apk") -Force
+```
+
+APK 기본 정보와 AndroidManifest 확인:
+
+```powershell
+& "$buildTools\aapt.exe" dump badging (Join-Path $work "palbang_base.apk")
+& "$buildTools\aapt.exe" dump permissions (Join-Path $work "palbang_base.apk")
+& "$buildTools\aapt.exe" dump xmltree (Join-Path $work "palbang_base.apk") AndroidManifest.xml
+```
+
+리소스/레이아웃 이름 찾기:
+
+```powershell
+& "$buildTools\aapt.exe" list (Join-Path $work "palbang_base.apk") | rg "res/xml|godic|hangul|qwerty|numbers|phone|popup"
+& "$buildTools\aapt.exe" dump xmltree (Join-Path $work "palbang_base.apk") res/xml/godic_hangul_a.xml
+& "$buildTools\aapt.exe" dump xmltree (Join-Path $work "palbang_base.apk") res/xml/godic_hangul_qwerty_land.xml
+```
+
+DEX를 텍스트로 덤프해서 클래스명, 메서드명, 상수 흐름을 찾는 방법:
+
+```powershell
+tar -xf (Join-Path $work "palbang_base.apk") -C $work classes.dex
+& "$buildTools\dexdump.exe" -d (Join-Path $work "classes.dex") > (Join-Path $work "classes_dexdump.txt")
+rg -n "SoftKeyboard|HangulCodeAutomata|VowelPatternRecog|SHORT_LINE_THRESH|LONG_LINE_THRESH|patternMatching" `
+  (Join-Path $work "classes_dexdump.txt")
+```
+
+현재 남아 있는 분석 산출물:
+
+- `.codex_apk_analysis\palbang_base.apk`: 원본 APK 복사본.
+- `.codex_apk_analysis\classes.dex`: 원본 APK에서 꺼낸 DEX.
+- `.codex_apk_analysis\classes_dexdump.txt`: `dexdump -d` 결과. `HangulCodeAutomata`, `VowelPatternRecog`, `Settings`, `SoftKeyboard` 등을 검색할 때 사용했다.
+- `docs_apk_reverse_notes.md`: 원본 패키지/권한/화면/기능 형태 요약.
+
+새 앱 APK 산출과 검증은 아래 스크립트를 우선 사용한다:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\run-ime-sim.ps1
+powershell -ExecutionPolicy Bypass -File tools\build-test-apks.ps1
+```
+
+`tools\build-test-apks.ps1`는 현재 패키지 APK와 레거시 패키지 제거용 APK를 `dist\`에 복사하고 SHA256을 출력한다. 산출 APK를 확인할 때는:
+
+```powershell
+& "$buildTools\aapt.exe" dump badging dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk
+$env:JAVA_HOME = "C:\Users\yadia\AppData\Local\Programs\Rider\jbr"
+$env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+& "$buildTools\apksigner.bat" verify --verbose dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk
+Get-FileHash -Algorithm SHA256 dist\YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk
+```
+
+실기기 설치는 기기가 `adb devices`에 잡힌 뒤:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\install-current.ps1 -RemoveLegacy -SetIme
+```
+
 ## 현재 구현 상태
 
 - Android `InputMethodService` 기반 키보드 앱.
@@ -78,6 +149,15 @@
 - 2026-05-19에 원본 APK의 `godic_hangul_*` XML을 기준으로 한글 레이아웃을 다시 맞췄다.
   - 윤키보드/2벌식 세로 화면은 원본처럼 삭제 키를 첫 행 오른쪽에 둔다.
   - 2벌식 가로 화면은 원본 `hangul_qwerty_land`처럼 자음+모음 한 화면 배열을 사용한다.
+- 2026-05-20에 보정 입력을 문장형에서 오타 글자 기반 계획형으로 바꿨다.
+  - 예: `현`을 넣으면 `현` 10회, 받침 제거형 `혀` 5회, 간섭 글자 `허` 5회와 `호` 5회를 자동으로 입력 과제로 만든다.
+  - 사용자가 과제 중 틀리게 입력해도 경고하지 않고, 해당 획을 의도 글자 샘플로 저장한다.
+- 2026-05-20에 쌍자음 입력 대기시간을 ms 프로그래스 바로 바꿨다.
+  - `SettingsStore.KEY_DOUBLE_TAP_TIMEOUT_MS`에 80~640ms 값을 저장한다.
+  - 쌍자음 변환은 이제 같은 자음이 설정 시간 안에 다시 눌린 경우에만 실행된다.
+- 2026-05-20에 터치 판정 설정 화면에 비주얼 키보드 프리뷰를 추가했다.
+  - 파란 면은 실제 키 영역, 빨간 선/면은 현재 설정값 기준 터치 인식 영역이다.
+  - 히트박스 슬라이더를 움직이면 프리뷰가 즉시 다시 그려진다.
 - 개인정보 이슈 때문에 비밀번호 문구 저장 기능은 구현하지 않았다.
 
 ## 주요 파일
@@ -124,8 +204,8 @@ app\build\outputs\bundle\release\app-release.aab
 
 - applicationId: `com.yadiate.yoonkeyboard`
 - namespace: `com.yadiate.yoonkeyboard`
-- versionCode: `14`
-- versionName: `0.2.12`
+- versionCode: `36`
+- versionName: `0.2.34`
 - minSdk: `21`
 - targetSdk: `35`
 - compileSdk: `35`
@@ -133,7 +213,7 @@ app\build\outputs\bundle\release\app-release.aab
 현재 APK SHA256:
 
 ```text
-D013045D0DACD7C41240C5B2F8D828E5A2404895A6591CC76AADBB7CED0633A4
+707377A48F3F8483676212ADEEDADDD81D6EF7E339DB67D2415AFD3F1842141C
 ```
 
 ## 최근 검증
@@ -151,8 +231,8 @@ D013045D0DACD7C41240C5B2F8D828E5A2404895A6591CC76AADBB7CED0633A4
 
 - Google Drive에 업로드된 APK는 이전 v2 빌드다. 최신 v6 로컬 빌드는 아직 Drive에 올리지 않았다.
 - Google Drive 파일:
-  - `EightWayIme-settings-v2.apk`
-  - https://drive.google.com/file/d/1wCH5RJMaQq1WZ4FM3_Tta9Lvb1B1k5_f/view?usp=drivesdk
+  - `YoonKeyboard-current-com.yadiate.yoonkeyboard-v0.2.34.apk`
+  - https://drive.google.com/file/d/1BzDmEgNbvpB3vsTnbCxqjm5HJk5MjsKd/view?usp=drivesdk
 - Google Drive 폴더:
   - `Codex Builds`
   - https://drive.google.com/drive/folders/1WkjdIEY8qJrw1Kx_AKc2VNpcGnN0imoL

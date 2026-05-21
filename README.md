@@ -22,7 +22,7 @@ Clean-room Android keyboard prototype based on the feature shape of the provided
   - supported compound gestures include ㅐ, ㅔ, ㅒ, ㅖ, ㅘ, ㅙ, ㅚ, ㅝ, ㅞ, ㅟ, ㅢ.
 - Hangul syllable composer with basic final consonant and compound final handling.
 - English, symbol, and number modes.
-- Clipboard context panel with paste support from the toolbar or by long-pressing Space.
+- Clipboard context panel with paste support from long-pressing the Hangul settings key.
 - Settings screen based on the analyzed APK feature set:
   - skin/theme selection
   - stroke length sensitivity
@@ -43,6 +43,21 @@ Then build and install the `app` module. After installing:
 1. Open the app.
 2. Tap "키보드 사용 설정 열기" and enable 윤키보드.
 3. Tap "키보드 선택창 열기" and select 윤키보드.
+
+## Test install guard
+
+Use the guarded install script when testing on a phone. It refuses to continue if
+the old package (`com.example.eightwayime`) is still installed, so bugs cannot be
+mistakenly tested against a legacy IME.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-test-apks.ps1
+powershell -ExecutionPolicy Bypass -File tools\install-current.ps1 -RemoveLegacy -SetIme
+```
+
+Legacy repair APKs are still built for devices that already have the old package,
+but their app label is `YoonKeyboard LEGACY REMOVE` so they cannot be confused
+with the current package in the keyboard picker.
 
 ## Notes
 

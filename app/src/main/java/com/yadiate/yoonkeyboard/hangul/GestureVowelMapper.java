@@ -10,35 +10,23 @@ public class GestureVowelMapper {
         RIGHT, LEFT, UP, DOWN, DOWN_RIGHT, UP_LEFT, UP_RIGHT, DOWN_LEFT
     }
 
-    private static final float REFERENCE_VOWEL_TOLERANCE_DEGREES =
-            GestureCalibration.DEFAULT_DIAGONAL_TOLERANCE_DEGREES;
     private static final float CARDINAL_DOMINANCE_RATIO = 2.4142137f;
-    private static final float DIAGONAL_CONTINUATION_MAX_ANGLE_CHANGE_DEGREES = REFERENCE_VOWEL_TOLERANCE_DEGREES;
-    private static final float SMOOTH_DIAGONAL_MAX_PATH_RATIO = 1.32f;
-    private static final float SMOOTH_DIAGONAL_MAX_CARDINAL_ANGLE_CHANGE_DEGREES = REFERENCE_VOWEL_TOLERANCE_DEGREES;
-    private static final float CLEAR_CORNER_MIN_FIRST_STROKE_RATIO = 0.78f;
-    private static final float CLEAR_CORNER_MIN_PATH_RATIO = 1.14f;
-    private static final float CLEAR_CORNER_MIN_ANGLE_CHANGE_DEGREES = 12f;
-    private static final float EARLY_DIRECTION_SAMPLE_MM = 1.2f;
-    private static final float YEO_SMOOTH_MIN_SCORE = 0.66f;
-    private static final float E_CORNER_WIN_MARGIN = 0.02f;
-    private static final float CURVED_E_MIN_SCORE_DOWN_LEFT = 0.44f;
-    private static final float CURVED_E_MIN_SCORE_UP_LEFT = 0.54f;
     private static final float BACKTRACK_AXIS_DOMINANCE_RATIO = 1.15f;
     private static final float MIN_LONG_GESTURE_MM = 5f;
     private static final float MIN_SHORT_LONG_GAP_MM = 1f;
-    private static final float LONG_CARDINAL_AXIS_WEIGHT = 0.62f;
-    private static final float LONG_CARDINAL_LENGTH_BONUS = 0.42f;
-    private static final float LONG_CARDINAL_LENGTH_MARGIN_WEIGHT = 0.18f;
-    private static final float DIAGONAL_SCORE_WEIGHT = 0.90f;
-    private static final float DIAGONAL_DIRECTION_BONUS = 0.10f;
-    private static final float LONG_CARDINAL_WIN_MARGIN = 0.03f;
+    private static final float DERIVATION_TURN_MIN_ANGLE_DEGREES = 50f;
+    private static final float DERIVATION_CLEAR_CORNER_MIN_ANGLE_DEGREES = 40f;
+    private static final float DERIVATION_CLEAR_CORNER_MIN_LEG_RATIO = 1.45f;
+    private static final int MAX_DERIVATION_LEGS = 4;
 
     private float xPixelsPerMm = 1f;
     private float yPixelsPerMm = 1f;
-    private float minSegmentMm = 3.6f;
+    private float firstSegmentMm = 3.6f;
+    private float derivationSegmentMm = 4.75f;
     private float longGestureMm = 13.5f;
+    private boolean blockYeoUpToYe;
     private GestureCalibration.Profile calibrationProfile;
+    private String activeCalibrationKey = "";
 
     public GestureVowelMapper(DisplayMetrics metrics) {
         setDisplayMetrics(metrics);
@@ -53,9 +41,20 @@ public class GestureVowelMapper {
     }
 
     public void setStrokeLengths(float minSegmentMm, float longGestureMm) {
+        setStrokeLengths(minSegmentMm, Math.max(minSegmentMm + 0.25f, minSegmentMm * 1.25f),
+                longGestureMm);
+    }
+
+    public void setStrokeLengths(float firstSegmentMm, float derivationSegmentMm, float longGestureMm) {
         this.longGestureMm = Math.max(MIN_LONG_GESTURE_MM, longGestureMm);
-        this.minSegmentMm = Math.max(0.5f,
-                Math.min(minSegmentMm, this.longGestureMm - MIN_SHORT_LONG_GAP_MM));
+        this.firstSegmentMm = Math.max(0.5f,
+                Math.min(firstSegmentMm, this.longGestureMm - MIN_SHORT_LONG_GAP_MM));
+        this.derivationSegmentMm = Math.max(this.firstSegmentMm + 0.25f,
+                Math.min(derivationSegmentMm, this.longGestureMm - MIN_SHORT_LONG_GAP_MM));
+    }
+
+    public void setBlockYeoUpToYe(boolean blockYeoUpToYe) {
+        this.blockYeoUpToYe = blockYeoUpToYe;
     }
 
     public void setCalibrationProfile(GestureCalibration.Profile calibrationProfile) {
@@ -69,165 +68,355 @@ public class GestureVowelMapper {
     }
 
     public Integer map(List<Point> points, Consonant consonant) {
-        if (points.size() < 2) {
+        return map(points, consonant, "");
+    }
+
+    public Integer map(List<Point> points, Consonant consonant, String calibrationKey) {
+        String previousCalibrationKey = activeCalibrationKey;
+        activeCalibrationKey = calibrationKey == null ? "" : calibrationKey;
+        try {
+            return mapWithActiveCalibration(points, consonant);
+        } finally {
+            activeCalibrationKey = previousCalibrationKey;
+        }
+    }
+
+    private Integer mapWithActiveCalibration(List<Point> points, Consonant consonant) {
+        if (points == null || points.size() < 2) {
             return null;
         }
 
-        List<Direction> directions = new ArrayList<>();
         Point start = points.get(0);
-        Point anchor = start;
-        Direction firstDirection = null;
-        float firstDirectionAngle = Float.NaN;
-        float firstDirectionDistance = 0f;
-        float firstSegmentMinMm = firstSegmentMinMm();
+        Point end = points.get(points.size() - 1);
+        Integer backtrackVowel = mapShortBacktrack(points, consonant);
+        if (backtrackVowel != null) {
+            return backtrackVowel;
+        }
+
+        List<StrokeLeg> legs = derivationLegs(points, consonant);
+        if (legs.isEmpty()) {
+            float totalDistance = pointsDistanceMm(start, end);
+            if (totalDistance < firstSegmentMinMm()) {
+                Integer stableVowel = mapFirstStableIntent(points, consonant);
+                return stableVowel == null ? null : stableVowel;
+            }
+            Direction overallDirection = directionFor(xDistanceMm(start, end), yDistanceMm(start, end), consonant);
+            legs.add(new StrokeLeg(overallDirection,
+                    dominantCardinalAxisDirection(xDistanceMm(start, end), yDistanceMm(start, end)),
+                    totalDistance));
+        }
+
+        StrokeLeg first = legs.get(0);
+        float totalDistance = pointsDistanceMm(start, end);
+        boolean longInitial = isLongGesture(first.direction,
+                legs.size() == 1 ? totalDistance : first.distanceMm, consonant);
+        Integer vowel = mapSingleDirection(first.direction, longInitial);
+        if (vowel == null) {
+            return null;
+        }
+        for (int i = 1; i < legs.size(); i++) {
+            vowel = deriveVowel(vowel, first.direction, legs.get(i));
+        }
+        vowel = constrainInitialDiagonalFlip(points, consonant, vowel);
+        return vowel;
+    }
+
+    private Integer mapFirstStableIntent(List<Point> points, Consonant consonant) {
+        StrokeLeg stable = firstStableIntent(points, consonant);
+        if (stable == null) {
+            return null;
+        }
+        Integer baseVowel = mapSingleDirection(stable.direction,
+                isLongGesture(stable.direction, stable.distanceMm, consonant));
+        Integer derivedVowel = deriveShortReverseVowel(baseVowel, stable, points.get(points.size() - 1), consonant);
+        return derivedVowel == null ? baseVowel : derivedVowel;
+    }
+
+    private StrokeLeg firstStableIntent(List<Point> points, Consonant consonant) {
+        if (points == null || points.size() < 2) {
+            return null;
+        }
+        Point start = points.get(0);
+        float minDistance = firstSegmentMinMm();
         for (int i = 1; i < points.size(); i++) {
             Point point = points.get(i);
-            float dx = xDistanceMm(anchor, point);
-            float dy = yDistanceMm(anchor, point);
-            float segmentMinMm = shouldResetStrokeLengthForNextDirection(directions)
-                    ? firstSegmentMinMm
-                    : minSegmentMm;
-            if (Math.hypot(dx, dy) < segmentMinMm) {
+            float dx = xDistanceMm(start, point);
+            float dy = yDistanceMm(start, point);
+            float distance = (float) Math.hypot(dx, dy);
+            if (distance < minDistance) {
+                continue;
+            }
+            return new StrokeLeg(directionFor(dx, dy, consonant), dominantCardinalAxisDirection(dx, dy),
+                    distance, point);
+        }
+        return null;
+    }
+
+    private Integer deriveShortReverseVowel(Integer baseVowel, StrokeLeg firstLeg, Point end, Consonant consonant) {
+        if (baseVowel == null || firstLeg == null || end == null) {
+            return null;
+        }
+        Direction reverseAxis = oppositeCardinal(firstLeg.axis);
+        if (reverseAxis == null) {
+            return null;
+        }
+        float dx = xDistanceMm(firstLeg.endPoint, end);
+        float dy = yDistanceMm(firstLeg.endPoint, end);
+        float distance = (float) Math.hypot(dx, dy);
+        if (distance < shortReverseDerivationMinMm()) {
+            return null;
+        }
+        Direction direction = dominantCardinalAxisDirection(dx, dy);
+        if (direction != reverseAxis) {
+            return null;
+        }
+        StrokeLeg reverseLeg = new StrokeLeg(directionFor(dx, dy, consonant), direction, distance, end);
+        Integer derived = deriveVowel(baseVowel, firstLeg.direction, reverseLeg);
+        return derived == baseVowel ? null : derived;
+    }
+
+    private Integer constrainInitialDiagonalFlip(List<Point> points, Consonant consonant, Integer vowel) {
+        if (!isInitialDiagonalVowel(vowel)) {
+            return vowel;
+        }
+        StableCardinal stable = firstStableCardinal(points, consonant);
+        if (stable == null) {
+            return vowel;
+        }
+        Integer baseVowel = mapSingleDirection(stable.direction, false);
+        if (baseVowel == null) {
+            return vowel;
+        }
+        Point end = points.get(points.size() - 1);
+        float dx = xDistanceMm(stable.point, end);
+        float dy = yDistanceMm(stable.point, end);
+        if (Math.hypot(dx, dy) < derivationSegmentMinMm()) {
+            return baseVowel;
+        }
+        StrokeLeg leg = new StrokeLeg(directionFor(dx, dy, consonant),
+                dominantCardinalAxisDirection(dx, dy), (float) Math.hypot(dx, dy));
+        Integer derived = deriveVowel(baseVowel, stable.direction, leg);
+        return derived == null ? baseVowel : derived;
+    }
+
+    private boolean isInitialDiagonalVowel(Integer vowel) {
+        return vowel != null
+                && (vowel == HangulComposer.V_YA
+                || vowel == HangulComposer.V_YEO
+                || vowel == HangulComposer.V_YO
+                || vowel == HangulComposer.V_YU);
+    }
+
+    private StableCardinal firstStableCardinal(List<Point> points, Consonant consonant) {
+        if (points == null || points.size() < 2) {
+            return null;
+        }
+        Point start = points.get(0);
+        float minDistance = firstCardinalIntentMinMm();
+        for (int i = 1; i < points.size(); i++) {
+            Point point = points.get(i);
+            float dx = xDistanceMm(start, point);
+            float dy = yDistanceMm(start, point);
+            if (Math.hypot(dx, dy) < minDistance) {
                 continue;
             }
             Direction direction = directionFor(dx, dy, consonant);
-            if (directions.isEmpty() || directions.get(directions.size() - 1) != direction) {
-                directions.add(direction);
-            }
-            if (firstDirection == null) {
-                firstDirection = direction;
-                firstDirectionAngle = angleFor(xDistanceMm(start, point), yDistanceMm(start, point));
-            }
-            if (direction == firstDirection) {
-                firstDirectionDistance = pointsDistanceMm(start, point);
-            }
-            anchor = point;
+            return isCardinal(direction) ? new StableCardinal(direction, point) : null;
         }
-
-        Point end = points.get(points.size() - 1);
-        float totalDistance = pointsDistanceMm(start, end);
-        float overallDx = xDistanceMm(start, end);
-        float overallDy = yDistanceMm(start, end);
-        Direction overallDirection = directionFor(overallDx, overallDy, consonant);
-        float overallAngle = angleFor(overallDx, overallDy);
-        boolean longSingle = isLongGesture(overallDirection, totalDistance, consonant);
-        Integer shortBacktrack = mapShortBacktrack(points);
-        if (shortBacktrack != null) {
-            return shortBacktrack;
-        }
-
-        Integer overall = mapOverallDirection(start, end, totalDistance, longSingle, consonant);
-        if (directions.isEmpty()) {
-            return overall;
-        }
-
-        boolean longFirst = isLongGesture(firstDirection, firstDirectionDistance, consonant);
-        float pathRatio = coarsePathDistanceMm(points) / Math.max(totalDistance, 0.001f);
-        Integer longCardinal = mapScoredLongCardinalCandidate(overallDx, overallDy, totalDistance, pathRatio,
-                firstDirection, firstDirectionAngle, firstDirectionDistance, directions, overallAngle, consonant);
-        if (longCardinal != null) {
-            return longCardinal;
-        }
-        Integer curvedE = mapCurvedLeftVerticalToE(points, overallDx, overallDy, totalDistance, pathRatio,
-                firstDirection, firstDirectionAngle, firstDirectionDistance, directions, overallDirection);
-        if (curvedE != null) {
-            return curvedE;
-        }
-        Integer smoothDiagonal = mapSmoothDiagonalTrace(points, overallDx, overallDy, totalDistance, pathRatio,
-                firstDirection, firstDirectionAngle, firstDirectionDistance, directions, longSingle, consonant);
-        if (smoothDiagonal != null) {
-            return smoothDiagonal;
-        }
-        Integer mapped = mapDirections(directions, longSingle, longFirst);
-        if (mapped != null) {
-            return mapped;
-        }
-        Integer diagonalContinuation = mapStableDiagonalContinuation(firstDirection, firstDirectionAngle,
-                firstDirectionDistance, directions, pathRatio, overallDirection, overallAngle, longSingle);
-        if (diagonalContinuation != null) {
-            return diagonalContinuation;
-        }
-        if (isCardinal(firstDirection)) {
-            return mapSingleDirection(firstDirection, longFirst);
-        }
-        return overall;
+        return null;
     }
 
-    private Integer mapScoredLongCardinalCandidate(float dx, float dy, float totalDistanceMm, float pathRatio,
-                                                   Direction firstDirection, float firstDirectionAngle,
-                                                   float firstDirectionDistance, List<Direction> directions,
-                                                   float overallAngle, Consonant consonant) {
-        Direction longDirection = dominantCardinalAxisDirection(dx, dy);
-        float longThreshold = longGestureThreshold(longDirection, consonant);
-        if (totalDistanceMm <= longThreshold) {
-            return null;
+    private List<StrokeLeg> derivationLegs(List<Point> points, Consonant consonant) {
+        List<StrokeLeg> legs = new ArrayList<>();
+        if (points == null || points.size() < 2) {
+            return legs;
         }
-        if (pathRatio > SMOOTH_DIAGONAL_MAX_PATH_RATIO) {
-            return null;
-        }
-        if (isCardinal(firstDirection) && !Float.isNaN(firstDirectionAngle)) {
-            float angleChange = Math.abs(GestureCalibration.angleDiff(firstDirectionAngle, overallAngle));
-            if (hasClearCorner(firstDirection, firstDirectionDistance, directions, angleChange, pathRatio)) {
-                return null;
+        Point legStart = points.get(0);
+        Point sampleAnchor = legStart;
+        Direction previousDirection = null;
+        float previousAngle = Float.NaN;
+        for (int i = 1; i < points.size(); i++) {
+            Point point = points.get(i);
+            float dx = xDistanceMm(sampleAnchor, point);
+            float dy = yDistanceMm(sampleAnchor, point);
+            float distance = (float) Math.hypot(dx, dy);
+            float segmentMinMm = previousDirection == null ? firstSegmentMinMm() : derivationSegmentMinMm();
+            if (distance < segmentMinMm) {
+                continue;
             }
+            Direction direction = directionFor(dx, dy, consonant);
+            float angle = angleFor(dx, dy);
+            float previousLegDistance = pointsDistanceMm(legStart, sampleAnchor);
+            boolean sharpTurn = isDerivationTurn(previousDirection, direction, previousAngle,
+                    angle, previousLegDistance);
+            if (sharpTurn) {
+                if (legs.size() >= MAX_DERIVATION_LEGS) {
+                    break;
+                }
+                int previousLegCount = legs.size();
+                addStrokeLeg(legs, legStart, sampleAnchor, consonant);
+                if (legs.size() > previousLegCount) {
+                    legStart = sampleAnchor;
+                }
+            }
+            previousDirection = direction;
+            previousAngle = angle;
+            sampleAnchor = point;
         }
-
-        float lengthMargin = clamp((totalDistanceMm - longThreshold) / Math.max(1f, longThreshold), 0f, 1f);
-        float longScore = axisConfidence(dx, dy) * LONG_CARDINAL_AXIS_WEIGHT
-                + LONG_CARDINAL_LENGTH_BONUS
-                + lengthMargin * LONG_CARDINAL_LENGTH_MARGIN_WEIGHT;
-        float diagonalScore = diagonalScore(overallAngle, directionFor(dx, dy, consonant), consonant);
-        return longScore > diagonalScore + LONG_CARDINAL_WIN_MARGIN
-                ? mapSingleDirection(longDirection, true)
-                : null;
+        addStrokeLeg(legs, legStart, points.get(points.size() - 1), consonant);
+        return legs;
     }
 
-    private Integer mapCurvedLeftVerticalToE(List<Point> points, float dx, float dy, float totalDistanceMm,
-                                             float pathRatio, Direction firstDirection, float firstDirectionAngle,
-                                             float firstDirectionDistance, List<Direction> directions,
-                                             Direction overallDirection) {
-        if (dx >= -firstSegmentMinMm()
-                || Math.abs(dy) < firstSegmentMinMm() * 0.45f
-                || totalDistanceMm < firstSegmentMinMm()) {
+    private boolean isDerivationTurn(Direction previousDirection, Direction direction,
+                                     float previousAngle, float angle, float previousLegDistance) {
+        if (previousDirection == null || direction == previousDirection) {
+            return false;
+        }
+        float angleChange = Math.abs(GestureCalibration.angleDiff(angle, previousAngle));
+        if (angleChange >= DERIVATION_TURN_MIN_ANGLE_DEGREES) {
+            return true;
+        }
+        if (isCardinal(previousDirection)
+                && !isCardinal(direction)
+                && previousLegDistance >= firstSegmentMinMm()) {
+            return true;
+        }
+        if (angleChange >= DERIVATION_CLEAR_CORNER_MIN_ANGLE_DEGREES
+                && previousLegDistance >= firstSegmentMinMm() * DERIVATION_CLEAR_CORNER_MIN_LEG_RATIO) {
+            return true;
+        }
+        return angleChange >= DERIVATION_CLEAR_CORNER_MIN_ANGLE_DEGREES
+                && !isCardinal(previousDirection)
+                && isCardinal(direction);
+    }
+
+    private void addStrokeLeg(List<StrokeLeg> legs, Point start, Point end, Consonant consonant) {
+        if (legs.size() >= MAX_DERIVATION_LEGS) {
+            return;
+        }
+        float dx = xDistanceMm(start, end);
+        float dy = yDistanceMm(start, end);
+        float minDistance = legs.isEmpty() ? firstSegmentMinMm() : derivationSegmentMinMm();
+        if (Math.hypot(dx, dy) < minDistance) {
+            return;
+        }
+        legs.add(new StrokeLeg(directionFor(dx, dy, consonant), dominantCardinalAxisDirection(dx, dy),
+                (float) Math.hypot(dx, dy)));
+    }
+
+    private Integer deriveVowel(Integer currentVowel, Direction firstDirection, StrokeLeg leg) {
+        if (currentVowel == null || leg == null) {
+            return currentVowel;
+        }
+        Direction axis = axisForVowelDerivation(currentVowel, leg);
+        switch (currentVowel) {
+            case HangulComposer.V_O:
+                if (axis == Direction.LEFT) {
+                    return HangulComposer.V_WAE;
+                }
+                if (axis == Direction.RIGHT) {
+                    return HangulComposer.V_WA;
+                }
+                if (axis == Direction.DOWN) {
+                    return HangulComposer.V_OE;
+                }
+                return currentVowel;
+            case HangulComposer.V_U:
+                if (axis == Direction.LEFT) {
+                    return HangulComposer.V_WEO;
+                }
+                if (axis == Direction.RIGHT) {
+                    return HangulComposer.V_WE;
+                }
+                if (axis == Direction.UP) {
+                    return HangulComposer.V_WI;
+                }
+                return currentVowel;
+            case HangulComposer.V_EO:
+                if (axis == Direction.RIGHT) {
+                    return HangulComposer.V_EU;
+                }
+                if (isVertical(axis)) {
+                    return HangulComposer.V_E;
+                }
+                return currentVowel;
+            case HangulComposer.V_A:
+                if (axis == Direction.LEFT) {
+                    return HangulComposer.V_EU;
+                }
+                if (isVertical(axis)) {
+                    return HangulComposer.V_AE;
+                }
+                return currentVowel;
+            case HangulComposer.V_YO:
+                return isOppositeDiagonal(firstDirection, leg.direction) || axis == Direction.DOWN
+                        ? HangulComposer.V_I
+                        : currentVowel;
+            case HangulComposer.V_YEO:
+                if (isOppositeDiagonal(firstDirection, leg.direction)) {
+                    return HangulComposer.V_I;
+                }
+                if (axis == Direction.UP && blockYeoUpToYe) {
+                    return currentVowel;
+                }
+                return isVertical(axis) ? HangulComposer.V_YE : currentVowel;
+            case HangulComposer.V_YU:
+                return isOppositeDiagonal(firstDirection, leg.direction) || axis == Direction.UP
+                        ? HangulComposer.V_I
+                        : currentVowel;
+            case HangulComposer.V_YA:
+                if (isOppositeDiagonal(firstDirection, leg.direction)) {
+                    return HangulComposer.V_I;
+                }
+                return axis == Direction.UP ? HangulComposer.V_YAE : currentVowel;
+            case HangulComposer.V_WA:
+                return isVertical(axis) ? HangulComposer.V_WAE : currentVowel;
+            case HangulComposer.V_WEO:
+                return isVertical(axis) ? HangulComposer.V_WE : currentVowel;
+            case HangulComposer.V_EU:
+                return isVertical(axis) && leg.distanceMm >= strictDerivationSegmentMinMm()
+                        ? HangulComposer.V_YI
+                        : currentVowel;
+            default:
+                return currentVowel;
+        }
+    }
+
+    private Direction axisForVowelDerivation(Integer currentVowel, StrokeLeg leg) {
+        if (leg == null || currentVowel == null) {
             return null;
         }
-        boolean leftDiagonal = overallDirection == Direction.DOWN_LEFT
-                || overallDirection == Direction.UP_LEFT
-                || firstDirection == Direction.DOWN_LEFT
-                || firstDirection == Direction.UP_LEFT;
-        if (!leftDiagonal) {
-            return null;
+        switch (currentVowel) {
+            case HangulComposer.V_EO:
+            case HangulComposer.V_A:
+                return hasVerticalComponent(leg.direction) && !isCardinal(leg.direction)
+                        ? verticalComponent(leg.direction)
+                        : leg.axis;
+            case HangulComposer.V_O:
+            case HangulComposer.V_U:
+                return hasHorizontalComponent(leg.direction) && !isCardinal(leg.direction)
+                        ? horizontalComponent(leg.direction)
+                        : leg.axis;
+            case HangulComposer.V_YO:
+            case HangulComposer.V_YEO:
+            case HangulComposer.V_YU:
+            case HangulComposer.V_YA:
+            case HangulComposer.V_WA:
+            case HangulComposer.V_WEO:
+            case HangulComposer.V_EU:
+                return hasVerticalComponent(leg.direction)
+                        ? verticalComponent(leg.direction)
+                        : leg.axis;
+            default:
+                return leg.axis;
         }
+    }
 
-        float horizontalHalfPath = axisReachPathFraction(points, true, 0.50f, dx, dy);
-        float verticalHalfPath = axisReachPathFraction(points, false, 0.50f, dx, dy);
-        float horizontalLead = verticalHalfPath - horizontalHalfPath;
-        float earlyHorizontal = axisProgressAtPathFraction(points, true, 0.30f, dx, dy);
-        float earlyVertical = axisProgressAtPathFraction(points, false, 0.30f, dx, dy);
-        float earlyAngle = angleAtDistanceMm(points, earlyDirectionSampleMm());
-        float angleChange = Float.isNaN(firstDirectionAngle)
-                ? 0f
-                : Math.abs(GestureCalibration.angleDiff(firstDirectionAngle, angleFor(dx, dy)));
-
-        Direction second = directions.size() > 1 ? directions.get(1) : null;
-        float leadScore = clamp((horizontalLead - 0.04f) / 0.22f, 0f, 1f);
-        float earlyLeadScore = clamp((earlyHorizontal - earlyVertical - 0.10f) / 0.36f, 0f, 1f);
-        float pathScore = clamp((pathRatio - 1.05f) / 0.26f, 0f, 1f);
-        float turnScore = clamp((angleChange - 6f) / 32f, 0f, 1f);
-        float firstLeftScore = firstDirection == Direction.LEFT
-                ? 1f
-                : (Float.isNaN(earlyAngle) ? 0f : angleCloseness(earlyAngle, 180f, 52f));
-        float sequenceScore = firstDirection == Direction.LEFT && second != null && isVerticalExtension(second)
-                ? 1f
-                : 0f;
-        float score = leadScore * 0.30f
-                + earlyLeadScore * 0.28f
-                + pathScore * 0.18f
-                + turnScore * 0.12f
-                + firstLeftScore * 0.08f
-                + sequenceScore * 0.04f;
-        float threshold = dy >= 0f ? CURVED_E_MIN_SCORE_DOWN_LEFT : CURVED_E_MIN_SCORE_UP_LEFT;
-        return score >= threshold ? HangulComposer.V_E : null;
+    private boolean isOppositeDiagonal(Direction firstDirection, Direction nextDirection) {
+        return (firstDirection == Direction.UP_RIGHT && nextDirection == Direction.DOWN_LEFT)
+                || (firstDirection == Direction.DOWN_LEFT && nextDirection == Direction.UP_RIGHT)
+                || (firstDirection == Direction.UP_LEFT && nextDirection == Direction.DOWN_RIGHT)
+                || (firstDirection == Direction.DOWN_RIGHT && nextDirection == Direction.UP_LEFT);
     }
 
     public Trace trace(List<Point> points) {
@@ -248,74 +437,16 @@ public class GestureVowelMapper {
         return new Trace(dx, dy, distance, angle, path, duration);
     }
 
-    private Integer mapOverallDirection(Point start, Point end, float totalDistanceMm, boolean longSingle,
-                                        Consonant consonant) {
-        float fallbackMinMm = firstSegmentMinMm();
-        if (totalDistanceMm < fallbackMinMm) {
-            return null;
-        }
-        float totalDx = xDistanceMm(start, end);
-        float totalDy = yDistanceMm(start, end);
-        List<Direction> overallDirection = new ArrayList<>();
-        overallDirection.add(directionFor(totalDx, totalDy, consonant));
-        return mapDirections(overallDirection, longSingle, longSingle);
-    }
-
-    private Integer mapDirections(List<Direction> directions, boolean longSingle, boolean longFirst) {
-        Direction first = directions.get(0);
-        Direction second = directions.size() > 1 ? directions.get(1) : null;
-        Direction third = directions.size() > 2 ? directions.get(2) : null;
-
-        if (directions.size() == 1) {
-            return mapSingleDirection(first, longSingle);
-        }
-
-        if (isHorizontalBacktrack(first, second)) {
-            return HangulComposer.V_EU;
-        }
-        if (isVerticalBacktrack(first, second)) {
-            return HangulComposer.V_I;
-        }
-        if (is(first, Direction.RIGHT) && isVerticalExtension(second)) {
-            return longFirst ? HangulComposer.V_YI : HangulComposer.V_AE;
-        }
-        if (is(first, Direction.LEFT) && isVerticalExtension(second)) {
-            return longFirst ? HangulComposer.V_YI : HangulComposer.V_E;
-        }
-        if (is(first, Direction.DOWN_RIGHT) && isVerticalExtension(second)) {
-            return HangulComposer.V_YAE;
-        }
-        if (is(first, Direction.UP_LEFT) && isVerticalExtension(second)) {
-            return HangulComposer.V_YE;
-        }
-        if (is(first, Direction.UP) && isRightward(second) && (isDownward(second) || isDownward(third))) {
-            return HangulComposer.V_WAE;
-        }
-        if (is(first, Direction.UP) && isRightward(second)) {
-            return HangulComposer.V_WA;
-        }
-        if (is(first, Direction.UP) && isDownward(second)) {
-            return HangulComposer.V_OE;
-        }
-        if (is(first, Direction.DOWN) && isLeftward(second) && (isUpward(second) || isUpward(third))) {
-            return HangulComposer.V_WE;
-        }
-        if (is(first, Direction.DOWN) && isUpward(second)) {
-            return HangulComposer.V_WI;
-        }
-        if (is(first, Direction.DOWN) && isLeftward(second)) {
-            return HangulComposer.V_WEO;
-        }
-        return null;
-    }
-
-    private Integer mapShortBacktrack(List<Point> points) {
+    private Integer mapShortBacktrack(List<Point> points, Consonant consonant) {
         BacktrackMatch horizontal = findShortBacktrack(points, true);
         BacktrackMatch vertical = findShortBacktrack(points, false);
-        if (horizontal.matched && (!vertical.matched || horizontal.score >= vertical.score)) {
+        if (horizontal.matched && (!vertical.matched || horizontal.strength >= vertical.strength)) {
             return HangulComposer.V_EU;
         }
         if (vertical.matched) {
+            if (consonant != null) {
+                return vertical.firstSign < 0 ? HangulComposer.V_OE : HangulComposer.V_WI;
+            }
             return HangulComposer.V_I;
         }
         return null;
@@ -326,24 +457,27 @@ public class GestureVowelMapper {
             return BacktrackMatch.NO_MATCH;
         }
         Point start = points.get(0);
-        float minMm = shortBacktrackSegmentMinMm();
+        float firstMinMm = shortBacktrackFirstSegmentMinMm();
+        float reverseMinMm = shortBacktrackReverseSegmentMinMm();
         int firstSign = 0;
         float extremeAxis = 0f;
-        float extremePerp = 0f;
         float firstLeg = 0f;
+        float minPerp = 0f;
+        float maxPerp = 0f;
         for (int i = 1; i < points.size(); i++) {
             Point point = points.get(i);
             float axis = horizontal ? xDistanceMm(start, point) : yDistanceMm(start, point);
             float perp = horizontal ? yDistanceMm(start, point) : xDistanceMm(start, point);
+            minPerp = Math.min(minPerp, perp);
+            maxPerp = Math.max(maxPerp, perp);
             if (firstSign == 0) {
                 float absAxis = Math.abs(axis);
                 float absPerp = Math.abs(perp);
-                if (absAxis < minMm || absAxis < absPerp * BACKTRACK_AXIS_DOMINANCE_RATIO) {
+                if (absAxis < firstMinMm || absAxis < absPerp * BACKTRACK_AXIS_DOMINANCE_RATIO) {
                     continue;
                 }
                 firstSign = axis >= 0f ? 1 : -1;
                 extremeAxis = axis;
-                extremePerp = perp;
                 firstLeg = absAxis;
                 continue;
             }
@@ -351,37 +485,85 @@ public class GestureVowelMapper {
             boolean extendedFirstLeg = firstSign > 0 ? axis > extremeAxis : axis < extremeAxis;
             if (extendedFirstLeg) {
                 extremeAxis = axis;
-                extremePerp = perp;
                 firstLeg = Math.abs(extremeAxis);
-                continue;
-            }
-
-            float reverseAxis = firstSign > 0 ? extremeAxis - axis : axis - extremeAxis;
-            float reversePerp = Math.abs(perp - extremePerp);
-            if (reverseAxis >= minMm && reverseAxis >= reversePerp * BACKTRACK_AXIS_DOMINANCE_RATIO) {
-                float score = firstLeg + reverseAxis - reversePerp * 0.35f;
-                return new BacktrackMatch(true, score);
             }
         }
-        return BacktrackMatch.NO_MATCH;
-    }
 
-    private boolean is(Direction actual, Direction expected) {
-        return actual == expected;
-    }
-
-    private boolean isHorizontalBacktrack(Direction first, Direction second) {
-        return (first == Direction.RIGHT && second == Direction.LEFT)
-                || (first == Direction.LEFT && second == Direction.RIGHT);
-    }
-
-    private boolean isVerticalBacktrack(Direction first, Direction second) {
-        return (first == Direction.UP && second == Direction.DOWN)
-                || (first == Direction.DOWN && second == Direction.UP);
+        if (firstSign == 0) {
+            return BacktrackMatch.NO_MATCH;
+        }
+        if (!horizontal && firstLeg >= stableVerticalBacktrackBaseLimitMm()) {
+            return BacktrackMatch.NO_MATCH;
+        }
+        Point end = points.get(points.size() - 1);
+        float finalAxis = horizontal ? xDistanceMm(start, end) : yDistanceMm(start, end);
+        float reverseAxis = firstSign > 0 ? extremeAxis - finalAxis : finalAxis - extremeAxis;
+        if (reverseAxis < reverseMinMm) {
+            return BacktrackMatch.NO_MATCH;
+        }
+        if (Math.abs(finalAxis) > shortBacktrackReturnLimitMm(firstLeg)) {
+            return BacktrackMatch.NO_MATCH;
+        }
+        float perpSpan = maxPerp - minPerp;
+        if (perpSpan > shortBacktrackPerpendicularLimitMm(Math.min(firstLeg, reverseAxis))) {
+            return BacktrackMatch.NO_MATCH;
+        }
+        float strength = firstLeg + reverseAxis - perpSpan * 0.45f;
+        return new BacktrackMatch(true, strength, firstSign);
     }
 
     private boolean isVertical(Direction direction) {
         return direction == Direction.UP || direction == Direction.DOWN;
+    }
+
+    private boolean hasVerticalComponent(Direction direction) {
+        return direction == Direction.UP
+                || direction == Direction.DOWN
+                || direction == Direction.UP_RIGHT
+                || direction == Direction.UP_LEFT
+                || direction == Direction.DOWN_RIGHT
+                || direction == Direction.DOWN_LEFT;
+    }
+
+    private boolean hasHorizontalComponent(Direction direction) {
+        return direction == Direction.RIGHT
+                || direction == Direction.LEFT
+                || direction == Direction.UP_RIGHT
+                || direction == Direction.DOWN_RIGHT
+                || direction == Direction.UP_LEFT
+                || direction == Direction.DOWN_LEFT;
+    }
+
+    private Direction verticalComponent(Direction direction) {
+        return direction == Direction.UP
+                || direction == Direction.UP_RIGHT
+                || direction == Direction.UP_LEFT
+                ? Direction.UP
+                : Direction.DOWN;
+    }
+
+    private Direction horizontalComponent(Direction direction) {
+        return direction == Direction.RIGHT
+                || direction == Direction.UP_RIGHT
+                || direction == Direction.DOWN_RIGHT
+                ? Direction.RIGHT
+                : Direction.LEFT;
+    }
+
+    private Direction oppositeCardinal(Direction direction) {
+        if (direction == Direction.RIGHT) {
+            return Direction.LEFT;
+        }
+        if (direction == Direction.LEFT) {
+            return Direction.RIGHT;
+        }
+        if (direction == Direction.UP) {
+            return Direction.DOWN;
+        }
+        if (direction == Direction.DOWN) {
+            return Direction.UP;
+        }
+        return null;
     }
 
     private boolean isCardinal(Direction direction) {
@@ -414,334 +596,44 @@ public class GestureVowelMapper {
         }
     }
 
-    private Integer mapStableDiagonalContinuation(Direction firstDirection, float firstDirectionAngle,
-                                                  float firstDirectionDistance, List<Direction> directions,
-                                                  float pathRatio, Direction overallDirection, float overallAngle,
-                                                  boolean longSingle) {
-        if (!isCardinal(firstDirection)
-                || overallDirection == null
-                || isCardinal(overallDirection)
-                || Float.isNaN(firstDirectionAngle)) {
-            return null;
-        }
-        float angleChange = Math.abs(GestureCalibration.angleDiff(firstDirectionAngle, overallAngle));
-        if (angleChange > DIAGONAL_CONTINUATION_MAX_ANGLE_CHANGE_DEGREES) {
-            return null;
-        }
-        if (hasClearCorner(firstDirection, firstDirectionDistance, directions, angleChange, pathRatio)) {
-            return null;
-        }
-        return mapSingleDirection(overallDirection, longSingle);
-    }
-
-    private Integer mapSmoothDiagonalTrace(List<Point> points, float dx, float dy, float totalDistanceMm,
-                                           float pathRatio,
-                                           Direction firstDirection, float firstDirectionAngle,
-                                           float firstDirectionDistance, List<Direction> directions,
-                                           boolean longSingle, Consonant consonant) {
-        if (firstDirection == null
-                || !isCardinal(firstDirection)
-                || totalDistanceMm < firstSegmentMinMm()
-                || pathRatio > SMOOTH_DIAGONAL_MAX_PATH_RATIO) {
-            return null;
-        }
-        Direction diagonal = referenceTransitionDiagonalDirection(firstDirection, angleFor(dx, dy),
-                totalDistanceMm, consonant);
-        if (diagonal == null) {
-            return null;
-        }
-        if (Float.isNaN(firstDirectionAngle)) {
-            return null;
-        }
-        float angleChange = Math.abs(GestureCalibration.angleDiff(firstDirectionAngle, angleFor(dx, dy)));
-        if (angleChange > SMOOTH_DIAGONAL_MAX_CARDINAL_ANGLE_CHANGE_DEGREES
-                && firstDirectionDistance > earlyDirectionSampleMm()) {
-            return null;
-        }
-        if (diagonal == Direction.UP_LEFT) {
-            float smoothScore = smoothDiagonalIntentScore(points, diagonal, angleFor(dx, dy),
-                    firstDirectionAngle, pathRatio, consonant);
-            float cornerScore = leftEIntentCornerScore(points, firstDirection, firstDirectionAngle,
-                    firstDirectionDistance, directions, pathRatio, angleChange);
-            if (cornerScore >= smoothScore - E_CORNER_WIN_MARGIN || smoothScore < YEO_SMOOTH_MIN_SCORE) {
-                return null;
-            }
-        }
-        if (hasClearCorner(firstDirection, firstDirectionDistance, directions, angleChange, pathRatio)) {
-            return null;
-        }
-        return mapSingleDirection(diagonal, longSingle);
-    }
-
-    private float smoothDiagonalIntentScore(List<Point> points, Direction diagonal, float overallAngle,
-                                            float firstDirectionAngle, float pathRatio, Consonant consonant) {
-        GestureCalibration.DirectionClass directionClass = classForDirection(diagonal);
-        float centerAngle = calibratedCenterAngle(consonant, directionClass, diagonal);
-        float tolerance = diagonalToleranceDegrees(consonant, directionClass);
-        float overallScore = angleCloseness(overallAngle, centerAngle, tolerance);
-        float earlyAngle = angleAtDistanceMm(points, earlyDirectionSampleMm());
-        float earlyScore = Float.isNaN(earlyAngle)
-                ? overallScore
-                : angleCloseness(earlyAngle, centerAngle, tolerance + 10f);
-        float straightScore = 1f - clamp((pathRatio - 1.02f) / 0.30f, 0f, 1f);
-        float turnScore = Float.isNaN(firstDirectionAngle)
-                ? 1f
-                : 1f - clamp(Math.abs(GestureCalibration.angleDiff(firstDirectionAngle, overallAngle))
-                / 48f, 0f, 1f);
-        return overallScore * 0.34f
-                + earlyScore * 0.30f
-                + straightScore * 0.22f
-                + turnScore * 0.14f;
-    }
-
-    private float leftEIntentCornerScore(List<Point> points, Direction firstDirection, float firstDirectionAngle,
-                                         float firstDirectionDistance, List<Direction> directions,
-                                         float pathRatio, float angleChange) {
-        if (firstDirection != Direction.LEFT) {
-            return 0f;
-        }
-        Direction second = directions.size() > 1 ? directions.get(1) : null;
-        float sequenceScore = second != null && isVerticalExtension(second) ? 1f : 0f;
-        float firstStrokeScore = clamp((firstDirectionDistance - earlyDirectionSampleMm())
-                / Math.max(0.8f, minSegmentMm * 0.65f), 0f, 1f);
-        float pathScore = clamp((pathRatio - 1.08f) / 0.24f, 0f, 1f);
-        float turnScore = clamp((angleChange - 8f) / 30f, 0f, 1f);
-        float earlyAngle = angleAtDistanceMm(points, earlyDirectionSampleMm());
-        float earlyLeftScore = Float.isNaN(earlyAngle) ? 0f : angleCloseness(earlyAngle, 180f, 45f);
-        return sequenceScore * 0.32f
-                + firstStrokeScore * 0.24f
-                + pathScore * 0.22f
-                + turnScore * 0.16f
-                + earlyLeftScore * 0.06f;
-    }
-
-    private Direction referenceTransitionDiagonalDirection(Direction firstDirection, float angle,
-                                                          float distanceMm, Consonant consonant) {
-        Direction expected = continuationDiagonalFor(firstDirection);
-        if (expected == null) {
-            return null;
-        }
-        Direction calibrated = calibratedDiagonalDirection(angle, distanceMm, consonant);
-        if (calibrated == expected) {
-            return calibrated;
-        }
-        GestureCalibration.DirectionClass expectedClass = classForDirection(expected);
-        float centerAngle = calibratedCenterAngle(consonant, expectedClass, expected);
-        float diff = Math.abs(GestureCalibration.angleDiff(angle, centerAngle));
-        return diff <= diagonalToleranceDegrees(consonant, expectedClass) ? expected : null;
-    }
-
-    private Direction continuationDiagonalFor(Direction firstDirection) {
-        switch (firstDirection) {
-            case RIGHT:
-                return Direction.DOWN_RIGHT;
-            case LEFT:
-                return Direction.UP_LEFT;
-            case UP:
-                return Direction.UP_RIGHT;
-            case DOWN:
-                return Direction.DOWN_LEFT;
-            default:
-                return null;
-        }
-    }
-
-    private float referenceCenterAngle(Direction direction) {
-        switch (direction) {
-            case DOWN_RIGHT:
-                return 45f;
-            case UP_LEFT:
-                return -135f;
-            case UP_RIGHT:
-                return -45f;
-            case DOWN_LEFT:
-                return 135f;
-            default:
-                return 0f;
-        }
-    }
-
-    private float angleCloseness(float angle, float centerAngle, float toleranceDegrees) {
-        float diff = Math.abs(GestureCalibration.angleDiff(angle, centerAngle));
-        return 1f - clamp(Math.min(diff, toleranceDegrees) / toleranceDegrees, 0f, 1f);
-    }
-
-    private float angleAtDistanceMm(List<Point> points, float targetDistanceMm) {
-        if (points == null || points.size() < 2) {
-            return Float.NaN;
-        }
-        Point start = points.get(0);
-        Point candidate = points.get(points.size() - 1);
-        for (int i = 1; i < points.size(); i++) {
-            Point point = points.get(i);
-            if (pointsDistanceMm(start, point) >= targetDistanceMm) {
-                candidate = point;
-                break;
-            }
-        }
-        float dx = xDistanceMm(start, candidate);
-        float dy = yDistanceMm(start, candidate);
-        if (Math.hypot(dx, dy) < 0.001f) {
-            return Float.NaN;
-        }
-        return angleFor(dx, dy);
-    }
-
-    private float axisReachPathFraction(List<Point> points, boolean horizontal, float axisProgress,
-                                        float totalDx, float totalDy) {
-        if (points == null || points.size() < 2) {
-            return 1f;
-        }
-        float totalAxis = horizontal ? Math.abs(totalDx) : Math.abs(totalDy);
-        if (totalAxis < 0.001f) {
-            return 1f;
-        }
-        float totalPath = rawPathDistanceMm(points);
-        if (totalPath < 0.001f) {
-            return 1f;
-        }
-        Point start = points.get(0);
-        Point previous = start;
-        float path = 0f;
-        for (int i = 1; i < points.size(); i++) {
-            Point point = points.get(i);
-            path += pointsDistanceMm(previous, point);
-            float currentAxis = horizontal
-                    ? Math.abs(xDistanceMm(start, point))
-                    : Math.abs(yDistanceMm(start, point));
-            if (currentAxis / totalAxis >= axisProgress) {
-                return clamp(path / totalPath, 0f, 1f);
-            }
-            previous = point;
-        }
-        return 1f;
-    }
-
-    private float axisProgressAtPathFraction(List<Point> points, boolean horizontal, float pathFraction,
-                                             float totalDx, float totalDy) {
-        if (points == null || points.size() < 2) {
-            return 0f;
-        }
-        float totalAxis = horizontal ? Math.abs(totalDx) : Math.abs(totalDy);
-        if (totalAxis < 0.001f) {
-            return 0f;
-        }
-        float totalPath = rawPathDistanceMm(points);
-        if (totalPath < 0.001f) {
-            return 0f;
-        }
-        float targetPath = totalPath * clamp(pathFraction, 0f, 1f);
-        Point start = points.get(0);
-        Point previous = start;
-        float path = 0f;
-        for (int i = 1; i < points.size(); i++) {
-            Point point = points.get(i);
-            float segment = pointsDistanceMm(previous, point);
-            if (path + segment >= targetPath) {
-                float t = segment < 0.001f ? 1f : clamp((targetPath - path) / segment, 0f, 1f);
-                float interpolatedX = previous.x + (point.x - previous.x) * t;
-                float interpolatedY = previous.y + (point.y - previous.y) * t;
-                Point interpolated = new Point(interpolatedX, interpolatedY, point.timeMs);
-                float currentAxis = horizontal
-                        ? Math.abs(xDistanceMm(start, interpolated))
-                        : Math.abs(yDistanceMm(start, interpolated));
-                return clamp(currentAxis / totalAxis, 0f, 1f);
-            }
-            path += segment;
-            previous = point;
-        }
-        return 1f;
-    }
-
-    private float rawPathDistanceMm(List<Point> points) {
-        float path = 0f;
-        for (int i = 1; i < points.size(); i++) {
-            path += pointsDistanceMm(points.get(i - 1), points.get(i));
-        }
-        return path;
-    }
-
-    private float earlyDirectionSampleMm() {
-        return Math.max(EARLY_DIRECTION_SAMPLE_MM, firstSegmentMinMm());
-    }
-
-    private boolean hasClearCorner(Direction firstDirection, float firstDirectionDistance,
-                                   List<Direction> directions, float angleChange, float pathRatio) {
-        if (firstDirectionDistance < minSegmentMm * CLEAR_CORNER_MIN_FIRST_STROKE_RATIO
-                || angleChange < CLEAR_CORNER_MIN_ANGLE_CHANGE_DEGREES
-                || pathRatio < CLEAR_CORNER_MIN_PATH_RATIO) {
-            return false;
-        }
-        if (directions.size() < 2) {
-            return true;
-        }
-        Direction second = directions.get(1);
-        return (is(firstDirection, Direction.LEFT) || is(firstDirection, Direction.RIGHT))
-                ? isVerticalExtension(second)
-                : isHorizontalExtension(second);
-    }
-
-    private boolean isVerticalExtension(Direction direction) {
-        return direction == Direction.UP
-                || direction == Direction.DOWN
-                || direction == Direction.UP_RIGHT
-                || direction == Direction.DOWN_RIGHT
-                || direction == Direction.UP_LEFT
-                || direction == Direction.DOWN_LEFT;
-    }
-
-    private boolean isHorizontalExtension(Direction direction) {
-        return direction == Direction.LEFT
-                || direction == Direction.RIGHT
-                || direction == Direction.UP_RIGHT
-                || direction == Direction.DOWN_RIGHT
-                || direction == Direction.UP_LEFT
-                || direction == Direction.DOWN_LEFT;
-    }
-
-    private boolean shouldResetStrokeLengthForNextDirection(List<Direction> directions) {
-        if (directions.isEmpty()) {
-            return true;
-        }
-        if (directions.size() < 2) {
-            return false;
-        }
-        Direction first = directions.get(0);
-        Direction second = directions.get(1);
-        return (is(first, Direction.UP) && isRightward(second))
-                || (is(first, Direction.DOWN) && isLeftward(second));
-    }
-
-    private boolean isRightward(Direction direction) {
-        return direction == Direction.RIGHT
-                || direction == Direction.UP_RIGHT
-                || direction == Direction.DOWN_RIGHT;
-    }
-
-    private boolean isLeftward(Direction direction) {
-        return direction == Direction.LEFT
-                || direction == Direction.UP_LEFT
-                || direction == Direction.DOWN_LEFT;
-    }
-
-    private boolean isDownward(Direction direction) {
-        return direction == Direction.DOWN
-                || direction == Direction.DOWN_RIGHT
-                || direction == Direction.DOWN_LEFT;
-    }
-
-    private boolean isUpward(Direction direction) {
-        return direction == Direction.UP
-                || direction == Direction.UP_RIGHT
-                || direction == Direction.UP_LEFT;
-    }
-
     private float firstSegmentMinMm() {
-        return Math.max(1f, minSegmentMm * 0.55f);
+        return Math.max(0.5f, firstSegmentMm * 0.55f);
     }
 
-    private float shortBacktrackSegmentMinMm() {
-        return Math.max(0.5f, minSegmentMm);
+    private float derivationSegmentMinMm() {
+        return Math.max(firstSegmentMinMm() + 0.15f, derivationSegmentMm * 0.55f);
+    }
+
+    private float strictDerivationSegmentMinMm() {
+        return Math.max(derivationSegmentMinMm(), derivationSegmentMm);
+    }
+
+    private float shortBacktrackFirstSegmentMinMm() {
+        return Math.max(0.8f, firstSegmentMinMm());
+    }
+
+    private float stableVerticalBacktrackBaseLimitMm() {
+        return Math.max(firstSegmentMinMm() + 0.5f, firstSegmentMinMm() * 1.35f);
+    }
+
+    private float firstCardinalIntentMinMm() {
+        return Math.max(0.8f, firstSegmentMinMm() * 0.5f);
+    }
+
+    private float shortReverseDerivationMinMm() {
+        return Math.max(0.8f, firstSegmentMinMm() * 0.65f);
+    }
+
+    private float shortBacktrackReverseSegmentMinMm() {
+        return Math.max(shortBacktrackFirstSegmentMinMm() + 0.15f, derivationSegmentMinMm());
+    }
+
+    private float shortBacktrackReturnLimitMm(float firstLegMm) {
+        return Math.max(0.9f, Math.min(firstSegmentMinMm(), firstLegMm * 0.65f));
+    }
+
+    private float shortBacktrackPerpendicularLimitMm(float axisLegMm) {
+        return Math.max(0.9f, Math.min(firstSegmentMinMm(), axisLegMm * 0.60f));
     }
 
     private boolean isLongGesture(Direction direction, float distanceMm, Consonant consonant) {
@@ -751,17 +643,13 @@ public class GestureVowelMapper {
     private float longGestureThreshold(Direction direction, Consonant consonant) {
         if (calibrationProfile != null) {
             if (direction == Direction.RIGHT || direction == Direction.LEFT) {
-                return calibrationProfile.longHorizontalMm(consonant, longGestureMm);
+                return calibrationProfile.longHorizontalMm(activeCalibrationKey, consonant, longGestureMm);
             }
             if (direction == Direction.UP || direction == Direction.DOWN) {
-                return calibrationProfile.longVerticalMm(consonant, longGestureMm);
+                return calibrationProfile.longVerticalMm(activeCalibrationKey, consonant, longGestureMm);
             }
         }
         return longGestureMm;
-    }
-
-    private Direction directionFor(float dx, float dy) {
-        return directionFor(dx, dy, null);
     }
 
     private Direction directionFor(float dx, float dy, Consonant consonant) {
@@ -803,71 +691,26 @@ public class GestureVowelMapper {
         return dy >= 0 ? Direction.DOWN : Direction.UP;
     }
 
-    private float axisConfidence(float dx, float dy) {
-        float major = Math.max(Math.abs(dx), Math.abs(dy));
-        if (major <= 0f) {
-            return 0f;
-        }
-        float minor = Math.min(Math.abs(dx), Math.abs(dy));
-        return clamp((major - minor) / major, 0f, 1f);
-    }
-
-    private float diagonalScore(float angle, Direction mappedDirection, Consonant consonant) {
-        float bestCloseness = 0f;
-        for (GestureCalibration.DirectionClass directionClass : diagonalClasses()) {
-            Direction direction = directionForClass(directionClass);
-            float centerAngle = calibratedCenterAngle(consonant, directionClass, direction);
-            float tolerance = diagonalToleranceDegrees(consonant, directionClass);
-            float diff = Math.abs(GestureCalibration.angleDiff(angle, centerAngle));
-            float closeness = 1f - Math.min(diff, tolerance) / tolerance;
-            bestCloseness = Math.max(bestCloseness, closeness);
-        }
-        float bonus = isCardinal(mappedDirection) ? 0f : DIAGONAL_DIRECTION_BONUS;
-        return bestCloseness * DIAGONAL_SCORE_WEIGHT + bonus;
-    }
-
-    private float clamp(float value, float min, float max) {
-        return Math.max(min, Math.min(value, max));
-    }
-
     private Direction calibratedDiagonalDirection(float angle, float distanceMm, Consonant consonant) {
         if (calibrationProfile == null) {
             return null;
         }
         Direction bestDirection = null;
-        float bestScore = Float.MAX_VALUE;
+        float bestRatio = Float.MAX_VALUE;
         for (GestureCalibration.DirectionClass directionClass : diagonalClasses()) {
-            GestureCalibration.DirectionProfile profile = calibrationProfile.directionProfile(consonant, directionClass);
+            GestureCalibration.DirectionProfile profile = calibrationProfile.directionProfile(
+                    activeCalibrationKey, consonant, directionClass);
             if (profile == null || distanceMm < profile.minDistanceMm) {
                 continue;
             }
             float diff = Math.abs(GestureCalibration.angleDiff(angle, profile.centerAngle));
-            float score = diff / Math.max(1f, profile.tolerance);
-            if (score <= 1f && score < bestScore) {
-                bestScore = score;
+            float ratio = diff / Math.max(1f, profile.tolerance);
+            if (ratio <= 1f && ratio < bestRatio) {
+                bestRatio = ratio;
                 bestDirection = directionForClass(directionClass);
             }
         }
         return bestDirection;
-    }
-
-    private float calibratedCenterAngle(Consonant consonant, GestureCalibration.DirectionClass directionClass,
-                                        Direction fallbackDirection) {
-        GestureCalibration.DirectionProfile profile = calibrationProfile == null
-                ? null
-                : calibrationProfile.directionProfile(consonant, directionClass);
-        return profile == null ? referenceCenterAngle(fallbackDirection) : profile.centerAngle;
-    }
-
-    private float diagonalToleranceDegrees(Consonant consonant, GestureCalibration.DirectionClass directionClass) {
-        GestureCalibration.DirectionProfile profile = calibrationProfile == null
-                ? null
-                : calibrationProfile.directionProfile(consonant, directionClass);
-        return profile == null
-                ? REFERENCE_VOWEL_TOLERANCE_DEGREES
-                : clamp(profile.tolerance,
-                GestureCalibration.MIN_DIAGONAL_TOLERANCE_DEGREES,
-                GestureCalibration.MAX_DIAGONAL_TOLERANCE_DEGREES);
     }
 
     private GestureCalibration.DirectionClass[] diagonalClasses() {
@@ -877,21 +720,6 @@ public class GestureVowelMapper {
                 GestureCalibration.DirectionClass.BOTTOM_RIGHT,
                 GestureCalibration.DirectionClass.BOTTOM_LEFT
         };
-    }
-
-    private GestureCalibration.DirectionClass classForDirection(Direction direction) {
-        switch (direction) {
-            case UP_RIGHT:
-                return GestureCalibration.DirectionClass.TOP_RIGHT;
-            case UP_LEFT:
-                return GestureCalibration.DirectionClass.TOP_LEFT;
-            case DOWN_RIGHT:
-                return GestureCalibration.DirectionClass.BOTTOM_RIGHT;
-            case DOWN_LEFT:
-                return GestureCalibration.DirectionClass.BOTTOM_LEFT;
-            default:
-                return null;
-        }
     }
 
     private Direction directionForClass(GestureCalibration.DirectionClass directionClass) {
@@ -923,26 +751,6 @@ public class GestureVowelMapper {
 
     private float pointsDistanceMm(Point first, Point second) {
         return (float) Math.hypot(xDistanceMm(first, second), yDistanceMm(first, second));
-    }
-
-    private float coarsePathDistanceMm(List<Point> points) {
-        float path = 0f;
-        Point anchor = points.get(0);
-        float segmentMin = firstSegmentMinMm();
-        for (int i = 1; i < points.size(); i++) {
-            Point point = points.get(i);
-            float distance = pointsDistanceMm(anchor, point);
-            if (distance < segmentMin) {
-                continue;
-            }
-            path += distance;
-            anchor = point;
-        }
-        Point end = points.get(points.size() - 1);
-        if (anchor != end) {
-            path += pointsDistanceMm(anchor, end);
-        }
-        return path;
     }
 
     public static class Point {
@@ -979,15 +787,45 @@ public class GestureVowelMapper {
         }
     }
 
+    private static class StrokeLeg {
+        final Direction direction;
+        final Direction axis;
+        final float distanceMm;
+        final Point endPoint;
+
+        StrokeLeg(Direction direction, Direction axis, float distanceMm) {
+            this(direction, axis, distanceMm, null);
+        }
+
+        StrokeLeg(Direction direction, Direction axis, float distanceMm, Point endPoint) {
+            this.direction = direction;
+            this.axis = axis;
+            this.distanceMm = distanceMm;
+            this.endPoint = endPoint;
+        }
+    }
+
+    private static class StableCardinal {
+        final Direction direction;
+        final Point point;
+
+        StableCardinal(Direction direction, Point point) {
+            this.direction = direction;
+            this.point = point;
+        }
+    }
+
     private static class BacktrackMatch {
-        static final BacktrackMatch NO_MATCH = new BacktrackMatch(false, 0f);
+        static final BacktrackMatch NO_MATCH = new BacktrackMatch(false, 0f, 0);
 
         final boolean matched;
-        final float score;
+        final float strength;
+        final int firstSign;
 
-        BacktrackMatch(boolean matched, float score) {
+        BacktrackMatch(boolean matched, float strength, int firstSign) {
             this.matched = matched;
-            this.score = score;
+            this.strength = strength;
+            this.firstSign = firstSign;
         }
     }
 }
