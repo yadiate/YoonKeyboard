@@ -84,6 +84,10 @@ public final class ImeSimulationRunner {
             return committed.toString() + composing;
         }
 
+        int composingLength() {
+            return composing.length();
+        }
+
         private void log(String op, String value) {
             if (trace) {
                 System.out.println("    " + op + "(" + escape(value == null ? "" : value)
@@ -100,6 +104,8 @@ public final class ImeSimulationRunner {
         private boolean immediateConsonantPlaceholderVisible;
         private Consonant recentlySettledStandaloneConsonant;
         private long recentlySettledStandaloneConsonantTimeMs;
+        private int lastComposingStart = -1;
+        private int lastComposingEnd = -1;
         private long now;
 
         Engine(boolean trace) {
@@ -146,6 +152,16 @@ public final class ImeSimulationRunner {
         void forceSettleStandalone() {
             tick();
             settleImmediateConsonantPlaceholderIfStandalone();
+        }
+
+        void androidComposingSelectionUpdate() {
+            int end = editor.text().length();
+            int start = Math.max(0, end - editor.composingLength());
+            updateSelection(0, 0, end, end, start, end);
+        }
+
+        void externalSelectionMove() {
+            updateSelection(0, 0, 0, 0, -1, -1);
         }
 
         void waitMs(long elapsedMs) {
@@ -241,7 +257,7 @@ public final class ImeSimulationRunner {
         }
 
         private int doubleConsonantTimeoutMs() {
-            return 380;
+            return 200;
         }
 
         private int doubleConsonantRecoveryTimeoutMs() {
@@ -253,6 +269,60 @@ public final class ImeSimulationRunner {
             lastConsonantTapTimeMs = 0L;
         }
 
+        private void updateSelection(
+                int oldSelStart,
+                int oldSelEnd,
+                int newSelStart,
+                int newSelEnd,
+                int candidatesStart,
+                int candidatesEnd
+        ) {
+            boolean selectionMoved = oldSelStart != newSelStart || oldSelEnd != newSelEnd;
+            boolean hasComposingRange = candidatesStart >= 0 && candidatesEnd >= candidatesStart;
+            if (hasComposingRange) {
+                lastComposingStart = candidatesStart;
+                lastComposingEnd = candidatesEnd;
+            }
+
+            boolean composingActive = composer.hasComposingText() || immediateConsonantPlaceholderVisible;
+            if (composingActive) {
+                if (hasComposingRange && newSelStart == candidatesEnd && newSelEnd == candidatesEnd) {
+                    return;
+                }
+                if (!hasComposingRange && !selectionMovedOutsideLastComposingRange(newSelStart, newSelEnd)) {
+                    return;
+                }
+                finishExternalComposingTextAndResetAutomata();
+                return;
+            }
+
+            if (selectionMoved) {
+                clearSettledStandaloneRecovery();
+                resetDoubleConsonantTapState();
+                clearComposingRange();
+            }
+        }
+
+        private boolean selectionMovedOutsideLastComposingRange(int newSelStart, int newSelEnd) {
+            return lastComposingStart >= 0
+                    && lastComposingEnd >= lastComposingStart
+                    && (newSelStart != lastComposingEnd || newSelEnd != lastComposingEnd);
+        }
+
+        private void finishExternalComposingTextAndResetAutomata() {
+            editor.finishComposingText();
+            composer.reset();
+            immediateConsonantPlaceholderVisible = false;
+            clearComposingRange();
+            clearSettledStandaloneRecovery();
+            resetDoubleConsonantTapState();
+        }
+
+        private void clearComposingRange() {
+            lastComposingStart = -1;
+            lastComposingEnd = -1;
+        }
+
         private void refreshComposingText() {
             if (composer.hasComposingText()) {
                 editor.setComposingText(composer.getComposingText());
@@ -260,6 +330,7 @@ public final class ImeSimulationRunner {
             } else {
                 editor.finishComposingText();
                 immediateConsonantPlaceholderVisible = false;
+                clearComposingRange();
             }
         }
 
@@ -268,6 +339,7 @@ public final class ImeSimulationRunner {
                 editor.finishComposingText();
                 immediateConsonantPlaceholderVisible = false;
                 composer.reset();
+                clearComposingRange();
                 return;
             }
             commitTextIfNeeded(composer.commit());
@@ -361,6 +433,7 @@ public final class ImeSimulationRunner {
         private void commitText(String text) {
             clearSettledStandaloneRecovery();
             editor.commitText(text);
+            clearComposingRange();
         }
 
         private void tick() {
@@ -385,6 +458,72 @@ public final class ImeSimulationRunner {
                     engine.finish();
                 },
                 "\uC4F0"));
+        cases.add(new Case("double_giyeok_survives_composing_selection_update",
+                engine -> {
+                    engine.touch(Consonant.GIYEOK);
+                    engine.androidComposingSelectionUpdate();
+                    engine.touch(Consonant.GIYEOK);
+                    engine.vowel(HangulComposer.V_A);
+                    engine.finish();
+                },
+                "\uAE4C"));
+        cases.add(new Case("double_digeut_survives_composing_selection_update",
+                engine -> {
+                    engine.touch(Consonant.DIGEUT);
+                    engine.androidComposingSelectionUpdate();
+                    engine.touch(Consonant.DIGEUT);
+                    engine.vowel(HangulComposer.V_A);
+                    engine.finish();
+                },
+                "\uB530"));
+        cases.add(new Case("double_bieup_survives_composing_selection_update",
+                engine -> {
+                    engine.touch(Consonant.BIEUP);
+                    engine.androidComposingSelectionUpdate();
+                    engine.touch(Consonant.BIEUP);
+                    engine.vowel(HangulComposer.V_A);
+                    engine.finish();
+                },
+                "\uBE60"));
+        cases.add(new Case("double_siot_survives_composing_selection_update",
+                engine -> {
+                    engine.touch(Consonant.SIOT);
+                    engine.androidComposingSelectionUpdate();
+                    engine.touch(Consonant.SIOT);
+                    engine.vowel(HangulComposer.V_A);
+                    engine.finish();
+                },
+                "\uC2F8"));
+        cases.add(new Case("double_jieut_survives_composing_selection_update",
+                engine -> {
+                    engine.touch(Consonant.JIEUT);
+                    engine.androidComposingSelectionUpdate();
+                    engine.touch(Consonant.JIEUT);
+                    engine.vowel(HangulComposer.V_A);
+                    engine.finish();
+                },
+                "\uC9DC"));
+        cases.add(new Case("double_siot_selection_update_second_drag_slow_release",
+                engine -> {
+                    engine.touch(Consonant.SIOT);
+                    engine.androidComposingSelectionUpdate();
+                    engine.touch(Consonant.SIOT);
+                    engine.androidComposingSelectionUpdate();
+                    engine.waitMs(520);
+                    engine.gesture(Consonant.SIOT, HangulComposer.V_EU, true);
+                    engine.finish();
+                },
+                "\uC4F0"));
+        cases.add(new Case("external_selection_cancels_double_recovery",
+                engine -> {
+                    engine.touch(Consonant.SIOT);
+                    engine.androidComposingSelectionUpdate();
+                    engine.externalSelectionMove();
+                    engine.touch(Consonant.SIOT);
+                    engine.vowel(HangulComposer.V_EU);
+                    engine.finish();
+                },
+                "\u3145\uC2A4"));
         cases.add(new Case("sseu_second_drag_slow_release",
                 engine -> {
                     engine.touch(Consonant.SIOT);

@@ -147,25 +147,29 @@ public class EightWayInputMethodService extends InputMethodService
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd);
         boolean selectionMoved = oldSelStart != newSelStart || oldSelEnd != newSelEnd;
-        if (selectionMoved) {
-            clearSettledStandaloneRecovery();
-            resetDoubleConsonantTapState();
-        }
-        if (!composer.hasComposingText() && !immediateConsonantPlaceholderVisible) {
-            return;
-        }
         boolean hasComposingRange = candidatesStart >= 0 && candidatesEnd >= candidatesStart;
         if (hasComposingRange) {
             lastComposingStart = candidatesStart;
             lastComposingEnd = candidatesEnd;
         }
-        if (hasComposingRange && isCursorStillAtComposingEnd(newSelStart, newSelEnd, candidatesEnd)) {
+
+        boolean composingActive = composer.hasComposingText() || immediateConsonantPlaceholderVisible;
+        if (composingActive) {
+            if (hasComposingRange && isCursorStillAtComposingEnd(newSelStart, newSelEnd, candidatesEnd)) {
+                return;
+            }
+            if (!hasComposingRange && !selectionMovedOutsideLastComposingRange(newSelStart, newSelEnd)) {
+                return;
+            }
+            finishExternalComposingTextAndResetAutomata();
             return;
         }
-        if (!hasComposingRange && !selectionMovedOutsideLastComposingRange(newSelStart, newSelEnd)) {
-            return;
+
+        if (selectionMoved) {
+            clearSettledStandaloneRecovery();
+            resetDoubleConsonantTapState();
+            clearComposingRange();
         }
-        finishExternalComposingTextAndResetAutomata();
     }
 
     @Override
@@ -756,6 +760,7 @@ public class EightWayInputMethodService extends InputMethodService
         } else {
             inputConnection.finishComposingText();
             immediateConsonantPlaceholderVisible = false;
+            clearComposingRange();
         }
     }
 
@@ -772,6 +777,7 @@ public class EightWayInputMethodService extends InputMethodService
         inputConnection.setComposingText("", 1);
         inputConnection.finishComposingText();
         immediateConsonantPlaceholderVisible = false;
+        clearComposingRange();
     }
 
     private void commitComposingText() {
@@ -782,6 +788,7 @@ public class EightWayInputMethodService extends InputMethodService
             }
             immediateConsonantPlaceholderVisible = false;
             composer.reset();
+            clearComposingRange();
             return;
         }
         commitTextIfNeeded(composer.commit());
@@ -892,6 +899,7 @@ public class EightWayInputMethodService extends InputMethodService
         if (inputConnection != null) {
             inputConnection.commitText(text, 1);
         }
+        clearComposingRange();
     }
 
     private void sendEnter() {
