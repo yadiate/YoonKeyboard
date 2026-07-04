@@ -1138,20 +1138,24 @@ public class EightWayInputMethodService extends InputMethodService
     }
 
     private KeyboardMode preferredModeForEditor(EditorInfo attribute) {
-        if (isPasswordInput(attribute)) {
-            return KeyboardMode.ENGLISH;
-        }
         if (attribute == null) {
             return KeyboardMode.HANGUL;
         }
-        int inputType = attribute.inputType;
-        int inputClass = inputType & InputType.TYPE_MASK_CLASS;
-        if (inputClass == InputType.TYPE_CLASS_NUMBER
-                || inputClass == InputType.TYPE_CLASS_PHONE
-                || inputClass == InputType.TYPE_CLASS_DATETIME) {
+        if (isNumericInput(attribute)) {
             return KeyboardMode.NUMBERS;
         }
+        if (isPasswordInput(attribute)) {
+            return KeyboardMode.ENGLISH;
+        }
         return KeyboardMode.HANGUL;
+    }
+
+    private boolean isNumericInput(EditorInfo attribute) {
+        int inputType = attribute.inputType;
+        int inputClass = inputType & InputType.TYPE_MASK_CLASS;
+        return inputClass == InputType.TYPE_CLASS_NUMBER
+                || inputClass == InputType.TYPE_CLASS_PHONE
+                || inputClass == InputType.TYPE_CLASS_DATETIME;
     }
 
     private void playKeySound() {
