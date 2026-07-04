@@ -32,8 +32,8 @@ public class KeyboardSurfaceView extends View {
     private static final float HANGUL_LEFT_KEY_WEIGHT = 1.1f;
     private static final float HANGUL_RIGHT_KEY_WEIGHT = 1.45f;
     private static final float FOLD_SPLIT_CENTER_GAP_WEIGHT = 2.6f;
-    private static final float SYMBOL_SIDE_KEY_WEIGHT = 1.05f;
-    private static final float NUMBER_SIDE_KEY_WEIGHT = 1.05f;
+    private static final float SYMBOL_SIDE_KEY_WEIGHT = HANGUL_LEFT_KEY_WEIGHT;
+    private static final float NUMBER_SIDE_KEY_WEIGHT = HANGUL_LEFT_KEY_WEIGHT;
     private static final int DEFAULT_KEYBOARD_BODY_DP = 252;
     private static final int TALL_KEYBOARD_BODY_DP = 310;
     private static final int GESTURE_START_SLOP_DP = 10;
@@ -2291,10 +2291,10 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.character(".,", "."),
                 KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.1f)));
         rows.add(row(
-                KeySpec.command("⚙", KeySpec.Type.SETTINGS, 1.05f),
-                KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, 1.05f),
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.05f),
-                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.05f),
+                KeySpec.command("⚙", KeySpec.Type.SETTINGS, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("ABC", KeySpec.Type.MODE_ENGLISH, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.command("space", KeySpec.Type.SPACE, 4.0f),
                 KeySpec.command("←", KeySpec.Type.MOVE_LEFT),
                 KeySpec.command("→", KeySpec.Type.MOVE_RIGHT),
@@ -2344,16 +2344,16 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("m", "\\", "ㅡ"),
                 KeySpec.command("DEL\n←", KeySpec.Type.DELETE, 1.5f)));
         rows.add(row(
-                KeySpec.command("ㄱㄴㄷ", KeySpec.Type.MODE_HANGUL, 1.15f),
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.15f),
-                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, 1.15f),
+                KeySpec.command("ㄱㄴㄷ", KeySpec.Type.MODE_HANGUL, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("#★♪", KeySpec.Type.MODE_SYMBOLS, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.command("!\n? ＿ .", KeySpec.Type.SPACE, 3.55f).withHints("~   ,", null),
                 KeySpec.command("↵", KeySpec.Type.ENTER, 3.0f)));
     }
 
     private void buildEnglishQwertyFoldSplitRows() {
         rows.add(row(
-                KeySpec.command("\uD55C\uAE00", KeySpec.Type.MODE_HANGUL, 1.15f),
+                KeySpec.command("\uD55C\uAE00", KeySpec.Type.MODE_HANGUL, HANGUL_LEFT_KEY_WEIGHT),
                 qwertyKey("q", "1", "\u3142"),
                 qwertyKey("w", "2", "\u3148"),
                 qwertyKey("e", "3", "\u3137"),
@@ -2364,9 +2364,10 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("u", "7", "\u3155"),
                 qwertyKey("i", "8", "\u3151"),
                 qwertyKey("o", "9", "\u3150"),
-                qwertyKey("p", "0", "\u3154")));
+                qwertyKey("p", "0", "\u3154"),
+                KeySpec.spacer(0.6f)));
         rows.add(row(
-                KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, 1.15f),
+                KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, HANGUL_LEFT_KEY_WEIGHT),
                 qwertyKey("a", "`", "\u3141"),
                 qwertyKey("s", "#", "\u3134"),
                 qwertyKey("d", "$", "\u3147"),
@@ -2377,10 +2378,10 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("j", "'", "\u3153"),
                 qwertyKey("k", "\"", "\u314F"),
                 qwertyKey("l", "|", "\u3163"),
-                KeySpec.spacer(1.5f)));
+                KeySpec.spacer(1.6f)));
         rows.add(row(
-                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, 1.15f),
-                KeySpec.command(isUppercaseMode() ? "SHIFT" : "shift", KeySpec.Type.SHIFT, 1.15f),
+                KeySpec.command("123", KeySpec.Type.MODE_NUMBERS, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command(isUppercaseMode() ? "SHIFT" : "shift", KeySpec.Type.SHIFT, HANGUL_LEFT_KEY_WEIGHT),
                 qwertyKey("z", "<", "\u314B"),
                 qwertyKey("x", ">", "\u314C"),
                 qwertyKey("c", "[", "\u314A"),
@@ -2391,13 +2392,13 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("m", "\\", "\u3161"),
                 KeySpec.spacer(2.5f)));
         rows.add(row(
-                KeySpec.command("DEL\n\uC0AD\uC81C", KeySpec.Type.DELETE, 1.15f),
-                KeySpec.command("<", KeySpec.Type.MOVE_LEFT, 1.15f),
-                KeySpec.command(">", KeySpec.Type.MOVE_RIGHT, 1.15f),
+                KeySpec.command("DEL\n\uC0AD\uC81C", KeySpec.Type.DELETE, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("<", KeySpec.Type.MOVE_LEFT, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command(">", KeySpec.Type.MOVE_RIGHT, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.command("space", KeySpec.Type.SPACE, 2.4f).withHints("~   ,", null),
-                KeySpec.command("Go", KeySpec.Type.ENTER, 1.15f),
+                KeySpec.command("Go", KeySpec.Type.ENTER, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
-                KeySpec.spacer(5.2f)));
+                KeySpec.spacer(4.9f)));
     }
 
     private KeySpec qwertyKey(String value, String topHint, String bottomHint) {
