@@ -2392,13 +2392,14 @@ public class KeyboardSurfaceView extends View {
                 qwertyKey("m", "\\", "\u3161"),
                 KeySpec.spacer(2.5f)));
         rows.add(row(
-                KeySpec.command("DEL\n\uC0AD\uC81C", KeySpec.Type.DELETE, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.command("<", KeySpec.Type.MOVE_LEFT, HANGUL_LEFT_KEY_WEIGHT),
                 KeySpec.command(">", KeySpec.Type.MOVE_RIGHT, HANGUL_LEFT_KEY_WEIGHT),
-                KeySpec.command("space", KeySpec.Type.SPACE, 2.4f).withHints("~   ,", null),
-                KeySpec.command("Go", KeySpec.Type.ENTER, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.spacer(3.9f),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
-                KeySpec.spacer(4.9f)));
+                KeySpec.command("space", KeySpec.Type.SPACE, 2.4f).withHints("~   ,", null),
+                KeySpec.command("DEL\n\uC0AD\uC81C", KeySpec.Type.DELETE, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.command("Go", KeySpec.Type.ENTER, HANGUL_LEFT_KEY_WEIGHT),
+                KeySpec.spacer(1.0f)));
     }
 
     private KeySpec qwertyKey(String value, String topHint, String bottomHint) {
@@ -2532,45 +2533,47 @@ public class KeyboardSurfaceView extends View {
     private void buildFoldSplitNumberRows() {
         rows.add(row(
                 KeySpec.command("\uD55C\uAE00", KeySpec.Type.MODE_HANGUL, NUMBER_SIDE_KEY_WEIGHT),
-                KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, NUMBER_SIDE_KEY_WEIGHT),
-                KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, NUMBER_SIDE_KEY_WEIGHT),
-                KeySpec.command("DEL\n\uC0AD\uC81C", KeySpec.Type.DELETE, NUMBER_SIDE_KEY_WEIGHT),
+                KeySpec.character("*", "*"),
+                KeySpec.character("/", "/"),
+                KeySpec.character("=", "="),
+                KeySpec.spacer(0.2f),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
                 KeySpec.character("1", "1"),
                 KeySpec.character("2", "2"),
                 KeySpec.character("3", "3"),
-                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT)));
+                KeySpec.command("DEL\n\uC0AD\uC81C", KeySpec.Type.DELETE, NUMBER_SIDE_KEY_WEIGHT)));
         rows.add(row(
-                KeySpec.character("*", "*"),
-                KeySpec.character("/", "/"),
-                KeySpec.character("=", "="),
-                KeySpec.command("Go", KeySpec.Type.ENTER, NUMBER_SIDE_KEY_WEIGHT),
+                KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, NUMBER_SIDE_KEY_WEIGHT),
+                KeySpec.character("%", "%"),
+                KeySpec.character("'", "'"),
+                KeySpec.character("#", "#"),
+                KeySpec.spacer(0.2f),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
                 KeySpec.character("4", "4"),
                 KeySpec.character("5", "5"),
                 KeySpec.character("6", "6"),
-                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT)));
+                KeySpec.command("Go", KeySpec.Type.ENTER, NUMBER_SIDE_KEY_WEIGHT)));
         rows.add(row(
-                KeySpec.character("%", "%"),
-                KeySpec.character("'", "'"),
-                KeySpec.character("#", "#"),
-                KeySpec.character("+", "+"),
+                KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, NUMBER_SIDE_KEY_WEIGHT),
+                KeySpec.character("(", "("),
+                KeySpec.character(")", ")"),
+                KeySpec.character("?", "?"),
+                KeySpec.spacer(0.2f),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
                 KeySpec.character("7", "7"),
                 KeySpec.character("8", "8"),
                 KeySpec.character("9", "9"),
-                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT)));
+                KeySpec.character("+", "+", NUMBER_SIDE_KEY_WEIGHT)));
         rows.add(row(
-                KeySpec.character("(", "("),
-                KeySpec.character(")", ")"),
-                KeySpec.character("?", "?"),
+                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT),
+                KeySpec.command("space", KeySpec.Type.SPACE, 2.0f).withHints("~   ,", null),
                 KeySpec.character(".", "."),
-                KeySpec.command("space", KeySpec.Type.SPACE, NUMBER_SIDE_KEY_WEIGHT).withHints("~   ,", null),
+                KeySpec.spacer(0.2f),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
-                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT),
+                KeySpec.spacer(1.0f),
                 KeySpec.character("0", "0"),
-                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT),
-                KeySpec.spacer(NUMBER_SIDE_KEY_WEIGHT)));
+                KeySpec.spacer(1.0f),
+                KeySpec.character("-", "-", NUMBER_SIDE_KEY_WEIGHT)));
     }
 
     private RowLayout row(KeySpec... keys) {
