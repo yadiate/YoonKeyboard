@@ -2518,8 +2518,8 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.character("+", "+")));
         rows.add(row(
                 KeySpec.command("Abc", KeySpec.Type.MODE_ENGLISH, NUMBER_SIDE_KEY_WEIGHT),
-                KeySpec.character("7", "7").withHints("(", null),
-                KeySpec.character("8", "8").withHints(")", null),
+                KeySpec.character("7", "7").withHints("!", null),
+                KeySpec.character("8", "8").withHints("@", null),
                 KeySpec.character("9", "9").withHints("?", null),
                 KeySpec.command("DEL\n←", KeySpec.Type.DELETE)));
         rows.add(row(
@@ -2555,13 +2555,13 @@ public class KeyboardSurfaceView extends View {
                 KeySpec.command("Go", KeySpec.Type.ENTER, NUMBER_SIDE_KEY_WEIGHT)));
         rows.add(row(
                 KeySpec.command("#+=", KeySpec.Type.MODE_SYMBOLS, NUMBER_SIDE_KEY_WEIGHT),
-                KeySpec.character("(", "("),
-                KeySpec.character(")", ")"),
+                KeySpec.character("!", "!"),
+                KeySpec.character("@", "@"),
                 KeySpec.character("?", "?"),
                 KeySpec.spacer(0.2f),
                 KeySpec.spacer(FOLD_SPLIT_CENTER_GAP_WEIGHT),
-                KeySpec.character("7", "7"),
-                KeySpec.character("8", "8"),
+                KeySpec.character("7", "7").withHints("!", null),
+                KeySpec.character("8", "8").withHints("@", null),
                 KeySpec.character("9", "9"),
                 KeySpec.character("+", "+", NUMBER_SIDE_KEY_WEIGHT)));
         rows.add(row(

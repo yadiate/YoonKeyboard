@@ -24,8 +24,8 @@ android {
         applicationId (project.findProperty("keyboardApplicationId") ?: "com.yadiate.yoonkeyboard")
         minSdk 21
         targetSdk 35
-        versionCode ((project.findProperty("keyboardVersionCode") ?: "45") as Integer)
-        versionName (project.findProperty("keyboardVersionName") ?: "0.2.43")
+        versionCode ((project.findProperty("keyboardVersionCode") ?: "46") as Integer)
+        versionName (project.findProperty("keyboardVersionName") ?: "0.2.44")
         manifestPlaceholders = [
                 keyboardAppLabel: project.findProperty("keyboardAppLabel") ?: "@string/app_name"
         ]
